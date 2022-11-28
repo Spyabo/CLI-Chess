@@ -63,7 +63,7 @@ def get_valid_moves_bishop(square: Board_squares, x: int, y: int) -> list[Positi
     init_x = x
     init_y = y
 
-    #Check sqaures top left of the piece
+    #Check squares top left of the piece
     while x > -1 or y < 8:
         x -= 1
         y += 1
@@ -75,7 +75,7 @@ def get_valid_moves_bishop(square: Board_squares, x: int, y: int) -> list[Positi
         else:
             break
     
-    #Check sqaures top right of the piece
+    #Check squares top right of the piece
     while x < 8 or y < 8:
         x += 1 
         y += 1
@@ -87,7 +87,7 @@ def get_valid_moves_bishop(square: Board_squares, x: int, y: int) -> list[Positi
         else:
             break
 
-    #Check sqaures bottom left of the piece
+    #Check squares bottom left of the piece
     while x > -1 or y > -1:
         x -= 1
         y -= 1
@@ -99,7 +99,7 @@ def get_valid_moves_bishop(square: Board_squares, x: int, y: int) -> list[Positi
         else:
             break
 
-    #Check sqaures bottom right of the piece
+    #Check squares bottom right of the piece
     while x < 8 or y > -1:
         x += 1
         y -= 1
@@ -165,7 +165,7 @@ def get_valid_moves_rook(square: Board_squares, x: int, y: int) -> list[Position
             break
         else:
             break
-    #Check sqaures below the piece
+    #Check squares below the piece
     for i in range(1, y + 1):
         if square.empty(x, y - i):
             valid_moves.append((x, y - i))
@@ -186,7 +186,7 @@ def get_valid_moves_queen(square: Board_squares, x: int, y: int) -> list[Positio
 def get_possible_moves_king(square: Board_squares, x: int, y: int) -> list[Position]:
     possible_moves: list[Position] = []
     moves: list[Position] = [
-    #all adjacent sqaures going clockwise starting from above 
+    #all adjacent squares going clockwise starting from above 
         (x,y+1),
         (x+1,y+1),
         (x+1,y),
