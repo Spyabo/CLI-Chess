@@ -184,7 +184,8 @@ def get_valid_moves_queen(square: Board_squares, x: int, y: int) -> list[Positio
     return valid_moves
 
 def get_possible_moves_king(square: Board_squares, x: int, y: int) -> list[Position]:
-    possible_moves: list[Position] = [
+    possible_moves: list[Position] = []
+    moves: list[Position] = [
     #all adjacent sqaures going clockwise starting from above 
         (x,y+1),
         (x+1,y+1),
@@ -195,4 +196,12 @@ def get_possible_moves_king(square: Board_squares, x: int, y: int) -> list[Posit
         (x-1,y),
         (x-1,y+1),
     ]
+    for move in moves:
+        move_x, move_y = move
+
+        if square.empty(move_x, move_y):
+            possible_moves.append(move)
+        elif square.piece(move_x, move_y).colour != square.piece(x, y).colour:
+            possible_moves.append(move)
+        else: pass
     return possible_moves
