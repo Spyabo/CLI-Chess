@@ -64,6 +64,3 @@ MOVE_LISTS: dict[PieceType, ValidMoveCalculator] = {
     PieceType.PAWN: get_valid_moves_pawn,
     PieceType.ROOK: get_valid_moves_rook
 }
-
-for i,j in range(1,3):
-    print(i,j)
