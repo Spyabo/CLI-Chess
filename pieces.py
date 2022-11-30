@@ -21,14 +21,15 @@ class Colour(Enum):
 
 
 PIECE_STR: dict[PieceType, tuple[str, str]] = {
-    PieceType.EMPTY: (" ", " "),
-    PieceType.PAWN: ("♙", "♟"),
-    PieceType.ROOK: ("♖", "♜"),
-    PieceType.BISHOP: ("♗", "♝"),
-    PieceType.QUEEN: ("♕", "♛"),
-    PieceType.KING: ("♔", "♚"),
-    PieceType.KNIGHT: ("♘", "♞"),
+    PieceType.EMPTY: ("•", "•"),
+    PieceType.PAWN: ("♟","♙"),
+    PieceType.ROOK: ("♜","♖"), 
+    PieceType.BISHOP: ("♝","♗"),
+    PieceType.QUEEN: ("♛","♕"),
+    PieceType.KING: ("♚","♔"),
+    PieceType.KNIGHT: ("♞","♘"),
 }
+
 
 FEN_MAP: dict[str, PieceType] = {
     "p": PieceType.PAWN,
@@ -65,8 +66,7 @@ class Piece:
 
     @property
     def image(self) -> str:
-        return f"pieces/{self.type}{self.colour}.png"
+        return f"pieces/{self.type}{self.colour.value.value}.png"
 
     def __str__(self):
-        return PIECE_STR[self.type][self.colour]
-
+        return PIECE_STR[self.type][self.colour.value]
