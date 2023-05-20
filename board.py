@@ -68,6 +68,11 @@ class Board:
     def get_valid_moves(self, x: int, y: int) -> list[Position]:
         return MOVE_LISTS[self.piece_type(x, y)]
 
+    def move(self, current_pos: tuple(int, int), to: tuple(int, int)) -> None:
+        current_piece = self.piece(*current_pos)
+        self.pieces[(to[0], to[1])] = current_piece
+        self.pieces[(current_pos[0], current_pos[1])] = Piece(*current_pos)
+
 
 MOVE_LISTS = {
     PieceType.PAWN: get_valid_moves_pawn,
