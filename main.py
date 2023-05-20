@@ -12,14 +12,21 @@ def newGame():
     player2 = input("Enter name for Black player: ")
     turn = 0
 
-    x = Board.from_fen("RNBQKBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbqkbnr")
+    x = Board.from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")
     while input != "q":
         match turn:
             case 0:
                 # White
                 draw_board_white(x)
                 move = input(f"{player1}, It's your turn!\n")
-
+                # Add logic for chess inputs
+                move_arr = move.split(" ")
+                print("Move: ", move_arr)
+                # input: 0 1 0 3
+                x.move(
+                    (int(move_arr[0]), int(move_arr[1])),
+                    (int(move_arr[2]), int(move_arr[3])),
+                )
             case 1:
                 # Black
                 draw_board_black(x)
