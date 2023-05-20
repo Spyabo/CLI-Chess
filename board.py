@@ -66,7 +66,7 @@ class Board:
                 return piece
 
     def get_valid_moves(self, x: int, y: int) -> list[Position]:
-        return MOVE_LISTS[self.piece(x, y)]
+        return MOVE_LISTS[self.piece_type(x, y)]
 
 
 MOVE_LISTS = {
