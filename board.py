@@ -84,11 +84,15 @@ MOVE_LISTS = {
 }
 
 
-def draw_board_white(board: Board) -> None:
+def draw_board_white(board: Board) -> str:
+    printed = ""
     for y in range(7, -1, -1):
         for x in range(8):
-            print(board.piece(x, y), end=" ")
-        print("\t")
+            # print(board.piece(x, y), end=" ")
+            printed += str(board.piece(x, y)) + " "
+        # print("\t")
+        printed += "\n"
+    return printed
 
 
 def draw_board_black(board: Board) -> None:
