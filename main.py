@@ -61,11 +61,11 @@ class Text_Board(Static):
     Text_Board {
         width: 24;
         height: 12;
-        padding: 1 2;
+        padding: 1 3;
         background: $panel;
         border: $secondary tall;
         content-align: center middle;
-        font-size: 12px;
+        text-align: center;
     }
     """
 
