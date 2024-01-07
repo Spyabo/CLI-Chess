@@ -20,22 +20,9 @@ class Colour(Enum):
     BLACK = 1
 
 
-"""
-   __ \n
-  /  \ \n 
-  \__/ \n
- /____\ \n
-  |  | \n
-  |__| \n
- (====) \n
- }===={ \n
-(______) \n
-"♟"
-"""
-
 PIECE_STR: dict[PieceType, tuple[str, str]] = {
     PieceType.EMPTY: ("•", "•"),
-    PieceType.PAWN: ("   __ \n  /  \ \n  \__/ \n", "♙"),
+    PieceType.PAWN: ("♟", "♙"),
     PieceType.ROOK: ("♜", "♖"),
     PieceType.BISHOP: ("♝", "♗"),
     PieceType.QUEEN: ("♛", "♕"),
