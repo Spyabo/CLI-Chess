@@ -16,6 +16,14 @@ from pieces import Colour, Piece, PieceType
 Grid = {}
 # dict[Position, Piece]
 
+MOVE_LISTS = {
+    PieceType.PAWN: get_valid_moves_pawn,
+    PieceType.BISHOP: get_valid_moves_bishop,
+    PieceType.KNIGHT: get_valid_moves_knight,
+    PieceType.ROOK: get_valid_moves_rook,
+    PieceType.QUEEN: get_valid_moves_queen,
+    PieceType.KING: get_possible_moves_king,
+}
 
 def empty_board() -> Grid:
     grid: Grid = {}
@@ -72,16 +80,6 @@ class Board:
         current_piece = self.piece(*current_pos)
         self.pieces[(to[0], to[1])] = current_piece
         self.pieces[(current_pos[0], current_pos[1])] = Piece(*current_pos)
-
-
-MOVE_LISTS = {
-    PieceType.PAWN: get_valid_moves_pawn,
-    PieceType.BISHOP: get_valid_moves_bishop,
-    PieceType.KNIGHT: get_valid_moves_knight,
-    PieceType.ROOK: get_valid_moves_rook,
-    PieceType.QUEEN: get_valid_moves_queen,
-    PieceType.KING: get_possible_moves_king,
-}
 
 
 def draw_board_white(board: Board) -> str:
