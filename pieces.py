@@ -21,7 +21,7 @@ class Colour(Enum):
 
 
 PIECE_STR: dict[PieceType, tuple[str, str]] = {
-    PieceType.EMPTY: ("•", "•"),
+    PieceType.EMPTY: ("·", "·"),
     PieceType.PAWN: ("♟", "♙"),
     PieceType.ROOK: ("♜", "♖"),
     PieceType.BISHOP: ("♝", "♗"),

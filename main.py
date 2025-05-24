@@ -15,12 +15,17 @@ class Text_Board(Widget):
     def render(self) -> str:
         return self.board
 
+
 class MyApp(App):
     CSS_PATH = "app.tcss"
     chess = Board.from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")
-    
+
     def compose(self) -> ComposeResult:
-        yield Grid(Text_Board(id="board"), Input(placeholder="Enter your move", id="input"), RichLog())
+        yield Grid(
+            Text_Board(id="board"),
+            RichLog(),
+            Input(placeholder="Enter your move", id="input"),
+        )
 
     def on_key(self, event: events.Key) -> None:
         text = self.query_one(Input).value
