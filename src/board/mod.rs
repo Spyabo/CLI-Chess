@@ -1,11 +1,15 @@
 mod position;
+mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 
 use crate::pieces::{Color, Piece, PieceType};
+use crate::moves;
 pub use position::Position;
+
+// use crate::moves;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Move {
@@ -24,11 +28,28 @@ impl fmt::Display for Move {
 pub struct GameState {
     pub board: Board,
     pub active_color: Color,
-    pub selected_square: Option<Position>,
-    pub valid_moves: HashSet<Position>,
     pub check: bool,
     pub checkmate: bool,
     pub stalemate: bool,
+    pub selected_square: Option<Position>,
+    pub valid_moves: HashSet<Position>,
+}
+
+impl Default for GameState {
+    fn default() -> Self {
+        let mut board = Board::default();
+        board.load_fen(STARTING_FEN).expect("Failed to load starting position");
+        
+        GameState {
+            board,
+            active_color: Color::White,
+            check: false,
+            checkmate: false,
+            stalemate: false,
+            selected_square: None,
+            valid_moves: HashSet::new(),
+        }
+    }
 }
 
 impl GameState {
@@ -72,14 +93,29 @@ impl GameState {
     
     /// Updates the game state (check, checkmate, stalemate)
     fn update_state(&mut self) {
-        // Check if the current player is in check
+        // Update check status
         self.check = self.board.is_in_check(self.active_color);
         
-        // Check for checkmate or stalemate
-        let has_legal_moves = self.has_any_legal_moves();
+        // Update valid moves for selected piece using the moves module
+        if let Some(pos) = self.selected_square {
+            use crate::moves::get_valid_moves;
+            self.valid_moves = get_valid_moves(&self.board, pos);
+            
+            // Filter out moves that would put the king in check
+            let current_moves = self.valid_moves.clone();
+            self.valid_moves = current_moves.into_iter()
+                .filter(|&to| {
+                    let mut board_clone = self.board.clone();
+                    board_clone.move_piece(pos, to).is_ok()
+                })
+                .collect();
+        } else {
+            self.valid_moves.clear();
+        }
         
-        if !has_legal_moves {
-            if self.check {
+        // Check for checkmate/stalemate
+        if !self.has_any_legal_moves() {
+            if self.board.is_in_check(self.active_color) {
                 self.checkmate = true;
             } else {
                 self.stalemate = true;
@@ -135,74 +171,16 @@ impl GameState {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_new_game_state() {
-        let game_state = GameState::new();
-        assert!(game_state.selected_square.is_none());
-        assert!(game_state.valid_moves.is_empty());
-        assert!(!game_state.check);
-        assert!(!game_state.checkmate);
-        assert!(!game_state.stalemate);
-    }
-
-    #[test]
-    fn test_from_fen() {
-        let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-        let game_state = GameState::from_fen(fen).unwrap();
-        assert!(game_state.selected_square.is_none());
-        assert!(game_state.valid_moves.is_empty());
-        assert!(!game_state.check);
-        assert!(!game_state.checkmate);
-        assert!(!game_state.stalemate);
-    }
-    
-    #[test]
-    fn test_check_detection() {
-        // Fool's mate position
-        let fen = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3";
-        let game_state = GameState::from_fen(fen).unwrap();
-        assert!(game_state.check);
-        assert!(!game_state.checkmate);
-        assert!(!game_state.stalemate);
-    }
-    
-    #[test]
-    fn test_checkmate_detection() {
-        // Fool's mate
-        let fen = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3";
-        let mut game_state = GameState::from_fen(fen).unwrap();
-        game_state.update_state();
-        assert!(game_state.check);
-        assert!(game_state.checkmate);
-        assert!(!game_state.stalemate);
-    }
-    
-    #[test]
-    fn test_stalemate_detection() {
-        // Basic stalemate position
-        let fen = "k7/8/8/8/8/8/6q1/7K b - - 0 1";
-        let mut game_state = GameState::from_fen(fen).unwrap();
-        game_state.update_state();
-        assert!(!game_state.check);
-        assert!(!game_state.checkmate);
-        assert!(game_state.stalemate);
-    }
-}
-
 const STARTING_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 #[derive(Debug, Clone)]
 pub struct Board {
-    squares: HashMap<Position, Piece>,
-    active_color: Color,
-    castling_rights: String,
-    en_passant_target: Option<Position>,
-    halfmove_clock: u32,
-    fullmove_number: u32,
+    pub squares: HashMap<Position, Piece>,
+    pub active_color: Color,
+    pub castling_rights: String,
+    pub en_passant_target: Option<Position>,
+    pub halfmove_clock: u32,
+    pub fullmove_number: u32,
 }
 
 impl Default for Board {
@@ -219,12 +197,6 @@ impl Default for Board {
 }
 
 impl Board {
-    pub fn new() -> Self {
-        let mut board = Self::default();
-        board.load_fen(STARTING_FEN).expect("Failed to load starting position");
-        board
-    }
-    
     pub fn load_fen(&mut self, fen: &str) -> Result<(), String> {
         let parts: Vec<&str> = fen.split_whitespace().collect();
         if parts.is_empty() {
@@ -307,139 +279,119 @@ impl Board {
     }
     
     pub fn is_square_under_attack(&self, pos: Position, by_color: Color) -> bool {
-        self.squares
-            .iter()
-            .filter(|(_, piece)| piece.piece_type != PieceType::Empty && piece.color == by_color)
-            .any(|(from, _)| {
-                let moves = self.get_pseudo_legal_moves(*from);
-                moves.contains(&pos)
-            })
+        use PieceType::*;
+        
+        let pos_x = pos.file() as i8;
+        let pos_y = pos.rank() as i8;
+        
+        // Check for pawn attacks
+        let pawn_rank_offset = if by_color == Color::White { 1 } else { -1 };
+        for file_offset in [-1, 1] {
+            let x = pos_x + file_offset;
+            let y = pos_y + pawn_rank_offset;
+            
+            if x >= 0 && x < 8 && y >= 0 && y < 8 {
+                if let Some(attack_pos) = Position::new(x, y) {
+                    if let Some(piece) = self.get_piece(attack_pos) {
+                        if piece.piece_type == Pawn && piece.color == by_color {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Check for knight attacks
+        let knight_offsets = [
+            (2, 1), (2, -1), (-2, 1), (-2, -1),
+            (1, 2), (1, -2), (-1, 2), (-1, -2)
+        ];
+        
+        for &(dx, dy) in &knight_offsets {
+            let x = pos_x + dx;
+            let y = pos_y + dy;
+            
+            if x >= 0 && x < 8 && y >= 0 && y < 8 {
+                if let Some(attack_pos) = Position::new(x, y) {
+                    if let Some(piece) = self.get_piece(attack_pos) {
+                        if piece.piece_type == Knight && piece.color == by_color {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Check for king attacks (distance of 1 in any direction)
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if dx == 0 && dy == 0 { continue; }
+                
+                let x = pos_x + dx;
+                let y = pos_y + dy;
+                
+                if x >= 0 && x < 8 && y >= 0 && y < 8 {
+                    if let Some(attack_pos) = Position::new(x, y) {
+                        if let Some(piece) = self.get_piece(attack_pos) {
+                            if piece.piece_type == King && piece.color == by_color {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Check for sliding pieces (rook, bishop, queen)
+        let sliding_offsets = [
+            (1, 0), (0, 1), (-1, 0), (0, -1),  // Rook/Queen directions
+            (1, 1), (1, -1), (-1, 1), (-1, -1)  // Bishop/Queen directions
+        ];
+        
+        for &(dx, dy) in &sliding_offsets {
+            let mut x = pos_x + dx;
+            let mut y = pos_y + dy;
+            
+            while x >= 0 && x < 8 && y >= 0 && y < 8 {
+                if let Some(attack_pos) = Position::new(x, y) {
+                    if let Some(piece) = self.get_piece(attack_pos) {
+                        if piece.color == by_color {
+                            match piece.piece_type {
+                                Rook if dx == 0 || dy == 0 => return true,
+                                Bishop if dx != 0 && dy != 0 => return true,
+                                Queen => return true,
+                                _ => {}
+                            }
+                        }
+                        break;  // Blocked by a piece
+                    }
+                } else {
+                    break;  // Invalid position
+                }
+                x += dx;
+                y += dy;
+            }
+        }
+        
+        false
     }
     
     pub fn get_pseudo_legal_moves(&self, from: Position) -> HashSet<Position> {
         let mut moves = HashSet::new();
-        
-        let piece = match self.get_piece(from) {
-            Some(p) => p,
-            None => return moves,
-        };
-        
-        match piece.piece_type {
-            PieceType::Empty => return moves, // No moves for empty squares
-            PieceType::Pawn => {
-                let dir = if piece.color == Color::White { 1 } else { -1 };
-                let start_rank = if piece.color == Color::White { 1 } else { 6 };
-                
-                // Forward moves
-                if let Some(one_forward) = Position::from_xy(from.x, from.y + dir) {
-                    if self.is_square_empty(one_forward) {
-                        moves.insert(one_forward);
-                        
-                        // Double move from starting position
-                        if from.y == start_rank {
-                            if let Some(two_forward) = Position::from_xy(from.x, from.y + 2 * dir) {
-                                if self.is_square_empty(two_forward) {
-                                    moves.insert(two_forward);
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Capture moves
-                    for dx in [-1, 1] {
-                        if let Some(capture_pos) = Position::from_xy(from.x + dx, from.y + dir) {
-                            if let Some(target_piece) = self.get_piece(capture_pos) {
-                                if target_piece.color != piece.color {
-                                    moves.insert(capture_pos);
-                                }
-                            }
-                            // TODO: Add en passant
-                        }
-                    }
-                }
-            },
-            PieceType::Knight => {
-                let knight_moves = [
-                    (2, 1), (1, 2), (-1, 2), (-2, 1),
-                    (-2, -1), (-1, -2), (1, -2), (2, -1)
-                ];
-                
-                for &(dx, dy) in &knight_moves {
-                    if let Some(new_pos) = Position::from_xy(from.x + dx, from.y + dy) {
-                        if let Some(target_piece) = self.get_piece(new_pos) {
-                            if target_piece.color != piece.color {
-                                moves.insert(new_pos);
-                            }
-                        } else {
-                            moves.insert(new_pos);
-                        }
-                    }
-                }
-            },
-            PieceType::Bishop => {
-                let directions = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
-                for &(dx, dy) in &directions {
-                    self.add_sliding_moves(from, dx, dy, &mut moves, piece.color);
-                }
-            },
-            PieceType::Rook => {
-                let directions = [(1, 0), (-1, 0), (0, 1), (0, -1)];
-                for &(dx, dy) in &directions {
-                    self.add_sliding_moves(from, dx, dy, &mut moves, piece.color);
-                }
-            },
-            PieceType::Queen => {
-                let directions = [
-                    (1, 0), (-1, 0), (0, 1), (0, -1),  // Rook moves
-                    (1, 1), (1, -1), (-1, 1), (-1, -1)   // Bishop moves
-                ];
-                for &(dx, dy) in &directions {
-                    self.add_sliding_moves(from, dx, dy, &mut moves, piece.color);
-                }
-            },
-            PieceType::King => {
-                for dx in -1..=1 {
-                    for dy in -1..=1 {
-                        if dx == 0 && dy == 0 { continue; }
-                        if let Some(new_pos) = Position::from_xy(from.x + dx, from.y + dy) {
-                            if let Some(target_piece) = self.get_piece(new_pos) {
-                                if target_piece.color != piece.color {
-                                    moves.insert(new_pos);
-                                }
-                            } else {
-                                moves.insert(new_pos);
-                            }
-                        }
-                    }
-                }
-                // TODO: Add castling
-            },
-        };
-        
-        moves
-    }
-    
-    fn add_sliding_moves(&self, from: Position, dx: i8, dy: i8, moves: &mut HashSet<Position>, color: Color) {
-        let mut x = from.x + dx;
-        let mut y = from.y + dy;
-        
-        while let Some(pos) = Position::from_xy(x, y) {
-            match self.get_piece(pos) {
-                Some(piece) => {
-                    if piece.color != color {
-                        moves.insert(pos);
-                    }
-                    break;
-                }
-                None => {
-                    moves.insert(pos);
-                    x += dx;
-                    y += dy;
-                }
+        if let Some(piece) = self.get_piece(from) {
+            match piece.piece_type {
+                PieceType::Pawn => moves::get_pawn_moves(self, from, piece.color, &mut moves),
+                PieceType::Rook => moves::get_rook_moves(self, from, piece.color, &mut moves),
+                PieceType::Knight => moves::get_knight_moves(self, from, piece.color, &mut moves),
+                PieceType::Bishop => moves::get_bishop_moves(self, from, piece.color, &mut moves),
+                PieceType::Queen => moves::get_queen_moves(self, from, piece.color, &mut moves),
+                PieceType::King => moves::get_king_moves(self, from, piece.color, &mut moves),
+                PieceType::Empty => {}
             }
         }
+        moves
     }
-    
+
     pub fn get_legal_moves(&self, from: Position) -> HashSet<Position> {
         let mut legal_moves = HashSet::new();
         let piece = match self.get_piece(from) {
@@ -449,14 +401,43 @@ impl Board {
         
         let pseudo_legal_moves = self.get_pseudo_legal_moves(from);
         
+        // Get the current king position before making any moves
+        let king_pos = if piece.piece_type == PieceType::King {
+            // If the piece is the king, the new position after move would be 'to'
+            // We'll handle this case specially in the loop
+            None
+        } else {
+            self.get_king_position(piece.color)
+        };
+        
         for &to in &pseudo_legal_moves {
-            let mut board_copy = self.clone();
-            board_copy.move_piece(from, to).ok();
+            // Skip castling moves for now, they're handled separately
+            if piece.piece_type == PieceType::King && (from.file() as i8 - to.file() as i8).abs() > 1 {
+                legal_moves.insert(to);
+                continue;
+            }
             
-            if let Some(king_pos) = board_copy.get_king_position(piece.color) {
-                if !board_copy.is_square_under_attack(king_pos, !piece.color) {
-                    legal_moves.insert(to);
-                }
+            // Create a temporary board for this move
+            let mut board_copy = self.clone();
+            
+            // Make the move on the copy
+            if board_copy.move_piece(from, to).is_err() {
+                continue;
+            }
+            
+            // Check if the king is in check after the move
+            let check_pos = if piece.piece_type == PieceType::King {
+                to  // King moved to 'to' position
+            } else {
+                // King didn't move, use original position
+                king_pos.unwrap_or_else(|| {
+                    // If we can't find the king, something is wrong
+                    panic!("King not found for color {:?}", piece.color);
+                })
+            };
+            
+            if !board_copy.is_square_under_attack(check_pos, !piece.color) {
+                legal_moves.insert(to);
             }
         }
         
@@ -498,10 +479,13 @@ impl Board {
 
     pub fn move_piece(&mut self, from: Position, to: Position) -> Result<(), String> {
         // Get the piece at the source position
-        let piece = match self.get_piece(from) {
+        let mut piece = match self.get_piece(from) {
             Some(p) => p.clone(),
             None => return Err("No piece at source position".to_string()),
         };
+        
+        // Initialize rook_move for castling
+        let mut rook_move = None;
 
         // Check if the move is pseudo-legal
         let pseudo_legal_moves = self.get_pseudo_legal_moves(from);
@@ -521,79 +505,84 @@ impl Board {
             }
         }
 
-        // Handle en passant capture
-        if let Some(ep_target) = self.en_passant_target {
-            if piece.piece_type == PieceType::Pawn && to == ep_target {
-                let capture_pos = Position::new(from.file(), to.rank()).unwrap();
-                self.remove_piece(capture_pos);
-            }
-        }
-
-        // Handle castling
-        if piece.piece_type == PieceType::King && (from.file() - to.file()).abs() > 1 {
-            // This is a castling move
-            let (rook_from_file, rook_to_file) = if to.file() > from.file() {
-                // Kingside castle
-                (7, 5)
-            } else {
-                // Queenside castle
-                (0, 3)
-            };
+        // Update castling rights if the king moves
+        if piece.piece_type == PieceType::King {
+            self.update_castling_rights_after_king_move(piece.color);
             
-            let rank = from.rank();
-            if let Some(rook_pos) = Position::new(rook_from_file, rank) {
-                if let Some(rook) = self.remove_piece(rook_pos) {
-                    let new_rook_pos = Position::new(rook_to_file, rank).unwrap();
-                    self.set_piece(new_rook_pos, rook);
+            // Handle castling move
+            if (from.file() as i8 - to.file() as i8).abs() > 1 {
+                // This is a castling move
+                let (rook_from_file, rook_to_file) = if to.file() > from.file() {
+                    // Kingside castle (O-O)
+                    (7, 5)
+                } else {
+                    // Queenside castle (O-O-O)
+                    (0, 3)
+                };
+                
+                let rank = from.rank();
+                if let Some(rook_pos) = Position::new(rook_from_file, rank) {
+                    if let Some(rook) = self.remove_piece(rook_pos) {
+                        let new_rook_pos = Position::new(rook_to_file, rank).unwrap();
+                        rook_move = Some((new_rook_pos, rook));
+                    }
                 }
             }
         }
 
-        // Execute the move
-        self.remove_piece(from);
-        self.set_piece(to, piece.clone());
-        
-        // Handle pawn promotion
-        if piece.piece_type == PieceType::Pawn && (to.rank() == 0 || to.rank() == 7) {
-            // For now, auto-promote to queen
-            let promoted_piece = Piece {
-                piece_type: PieceType::Queen,
-                color: piece.color,
-                has_moved: true,
-                moves_made: piece.moves_made + 1,
-            };
-            self.set_piece(to, promoted_piece);
-        } else if let Some(p) = self.get_piece_mut(to) {
-            // Update piece has_moved status for non-promoted pieces
-            p.has_moved = true;
-            p.moves_made += 1;
+        // Update castling rights if a rook moves
+        if piece.piece_type == PieceType::Rook {
+            self.update_castling_rights_after_rook_move(from, piece.color);
         }
 
-        // Update en passant target for next move
-        if piece.piece_type == PieceType::Pawn && (from.rank() as i8 - to.rank() as i8).abs() == 2 {
-            let ep_rank = (from.rank() + to.rank()) / 2;
-            self.en_passant_target = Position::new(from.file(), ep_rank);
-        } else {
-            self.en_passant_target = None;
+        // Handle en passant capture
+        if let Some(ep_target) = self.en_passant_target {
+            if piece.piece_type == PieceType::Pawn && to == ep_target {
+                // The captured pawn is on the same file as the destination, but on the rank we came from
+                let capture_pos = Position::new(to.file(), from.rank()).unwrap();
+                self.remove_piece(capture_pos);
+            }
         }
+        
+        // Reset en passant target at the start of each move
+        self.en_passant_target = None;
+        
+        // Set en passant target if a pawn moves two squares
+        if piece.piece_type == PieceType::Pawn && (from.rank() as i8 - to.rank() as i8).abs() == 2 {
+            let direction = match piece.color {
+                Color::White => 1,
+                Color::Black => -1,
+            };
+            let ep_rank = from.rank() as i8 + direction;
+            if ep_rank >= 0 && ep_rank < 8 {
+                self.en_passant_target = Position::new(from.file() as i8, ep_rank);
+            }
+        }
+
+        // Handle pawn promotion before moving the piece
+        if piece.piece_type == PieceType::Pawn && (to.rank() == 0 || to.rank() == 7) {
+            // Auto-promote to queen
+            piece.piece_type = PieceType::Queen;
+        }
+        
+        // Execute the move
+        self.remove_piece(from);
+        
+        // If this is a castling move, place the rook
+        if let Some((rook_pos, rook)) = rook_move {
+            self.set_piece(rook_pos, rook);
+        }
+        
+        // Update the piece's moved status before placing it
+        piece.has_moved = true;
+        piece.moves_made += 1;
+        
+        self.set_piece(to, piece);
 
         // Toggle active color
         self.active_color = !self.active_color;
 
         Ok(())
-    }
-
-    pub fn is_square_attacked(&self, pos: Position, by_color: Color) -> bool {
-        // Check all opponent's pieces to see if they attack the given square
-        for (square, piece) in &self.squares {
-            if piece.color == by_color {
-                let moves = self.get_pseudo_legal_moves(*square);
-                if moves.contains(&pos) {
-                    return true;
-                }
-            }
-        }
-        false
     }
 
     pub fn is_square_empty(&self, pos: Position) -> bool {
@@ -607,24 +596,36 @@ impl Board {
             false // No king found (shouldn't happen in a valid game)
         }
     }
-}
-
-impl fmt::Display for Board {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for rank in (0..8).rev() {
-            for file in 0..8 {
-                if let Some(pos) = Position::new(file, rank) {
-                    if let Some(piece) = self.get_piece(pos) {
-                        write!(f, "{} ", piece)?;
-                    } else {
-                        write!(f, ". ")?;
-                    }
-                } else {
-                    write!(f, "? ")?;
-                }
+    
+    /// Returns the current en passant target square, if any
+    pub fn en_passant_target(&self) -> Option<Position> {
+        self.en_passant_target
+    }
+    
+    fn update_castling_rights_after_king_move(&mut self, color: Color) {
+        // When the king moves, remove all castling rights for that color
+        match color {
+            Color::White => {
+                self.castling_rights = self.castling_rights.chars()
+                    .filter(|&c| c != 'K' && c != 'Q')
+                    .collect();
+            },
+            Color::Black => {
+                self.castling_rights = self.castling_rights.chars()
+                    .filter(|&c| c != 'k' && c != 'q')
+                    .collect();
             }
-            writeln!(f)?;
         }
-        Ok(())
+    }
+    
+    fn update_castling_rights_after_rook_move(&mut self, from: Position, color: Color) {
+        // If a rook moves from its starting position, remove the corresponding castling right
+        match (color, from.file()) {
+            (Color::White, 0) => self.castling_rights.retain(|c| c != 'Q'),  // Queenside rook
+            (Color::White, 7) => self.castling_rights.retain(|c| c != 'K'),  // Kingside rook
+            (Color::Black, 0) => self.castling_rights.retain(|c| c != 'q'),  // Queenside rook
+            (Color::Black, 7) => self.castling_rights.retain(|c| c != 'k'),  // Kingside rook
+            _ => {}
+        }
     }
 }

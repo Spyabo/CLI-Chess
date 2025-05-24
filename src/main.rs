@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn test_board_initialization() {
-        let board = Board::new();
+        let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
         let pos = crate::board::Position::new(0, 0).unwrap();
         assert_eq!(board.get_piece(pos).unwrap().piece_type, PieceType::Rook);
     }

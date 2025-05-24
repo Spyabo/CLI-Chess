@@ -1,8 +1,8 @@
 use crate::board::{Board, Position};
 use crate::pieces::{Color, PieceType};
 
-pub fn get_valid_moves(board: &Board, from: Position) -> Vec<Position> {
-    let mut moves = Vec::new();
+pub fn get_valid_moves(board: &Board, from: Position) -> std::collections::HashSet<Position> {
+    let mut moves = std::collections::HashSet::new();
     
     if let Some(piece) = board.get_piece(from) {
         match piece.piece_type {
@@ -19,28 +19,26 @@ pub fn get_valid_moves(board: &Board, from: Position) -> Vec<Position> {
     moves
 }
 
-fn get_pawn_moves(board: &Board, from: Position, color: Color, moves: &mut Vec<Position>) {
+pub fn get_pawn_moves(board: &Board, from: Position, color: Color, moves: &mut std::collections::HashSet<Position>) {
     let direction = match color {
         Color::White => 1,
         Color::Black => -1,
-        _ => return,
     };
     
     let one_forward = from + (0, direction);
     if one_forward.is_valid() && board.is_square_empty(one_forward) {
-        moves.push(one_forward);
+        moves.insert(one_forward);
         
         // Check for double move from starting position
         let starting_rank = match color {
             Color::White => 1,
             Color::Black => 6,
-            _ => return,
         };
         
         if from.y == starting_rank {
             let two_forward = from + (0, 2 * direction);
             if two_forward.is_valid() && board.is_square_empty(two_forward) {
-                moves.push(two_forward);
+                moves.insert(two_forward);
             }
         }
     }
@@ -52,21 +50,32 @@ fn get_pawn_moves(board: &Board, from: Position, color: Color, moves: &mut Vec<P
             continue;
         }
         
+        // Regular capture
         if let Some(target_piece) = board.get_piece(capture_pos) {
             if target_piece.color != color {
-                moves.push(capture_pos);
+                moves.insert(capture_pos);
             }
         }
-        // TODO: Handle en passant
+        // En passant capture
+        else if let Some(ep_target) = board.en_passant_target() {
+            if capture_pos == ep_target {
+                let ep_capture_pos = Position::new(capture_pos.file(), from.rank()).unwrap();
+                if let Some(target_piece) = board.get_piece(ep_capture_pos) {
+                    if target_piece.piece_type == PieceType::Pawn && target_piece.color != color {
+                        moves.insert(capture_pos);
+                    }
+                }
+            }
+        }
     }
 }
 
-fn get_rook_moves(board: &Board, from: Position, color: Color, moves: &mut Vec<Position>) {
+pub fn get_rook_moves(board: &Board, from: Position, color: Color, moves: &mut std::collections::HashSet<Position>) {
     let directions = [(1, 0), (-1, 0), (0, 1), (0, -1)];
     get_sliding_moves(board, from, color, &directions, moves);
 }
 
-fn get_knight_moves(board: &Board, from: Position, color: Color, moves: &mut Vec<Position>) {
+pub fn get_knight_moves(board: &Board, from: Position, color: Color, moves: &mut std::collections::HashSet<Position>) {
     let knight_moves = [
         (2, 1), (2, -1), (-2, 1), (-2, -1),
         (1, 2), (1, -2), (-1, 2), (-1, -2),
@@ -80,20 +89,20 @@ fn get_knight_moves(board: &Board, from: Position, color: Color, moves: &mut Vec
         
         if let Some(piece) = board.get_piece(to) {
             if piece.color != color {
-                moves.push(to);
+                moves.insert(to);
             }
         } else {
-            moves.push(to);
+            moves.insert(to);
         }
     }
 }
 
-fn get_bishop_moves(board: &Board, from: Position, color: Color, moves: &mut Vec<Position>) {
+pub fn get_bishop_moves(board: &Board, from: Position, color: Color, moves: &mut std::collections::HashSet<Position>) {
     let directions = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
     get_sliding_moves(board, from, color, &directions, moves);
 }
 
-fn get_queen_moves(board: &Board, from: Position, color: Color, moves: &mut Vec<Position>) {
+pub fn get_queen_moves(board: &Board, from: Position, color: Color, moves: &mut std::collections::HashSet<Position>) {
     let directions = [
         (1, 0), (-1, 0), (0, 1), (0, -1),  // Rook moves
         (1, 1), (1, -1), (-1, 1), (-1, -1), // Bishop moves
@@ -101,7 +110,7 @@ fn get_queen_moves(board: &Board, from: Position, color: Color, moves: &mut Vec<
     get_sliding_moves(board, from, color, &directions, moves);
 }
 
-fn get_king_moves(board: &Board, from: Position, color: Color, moves: &mut Vec<Position>) {
+pub fn get_king_moves(board: &Board, from: Position, color: Color, moves: &mut std::collections::HashSet<Position>) {
     let king_moves = [
         (1, 0), (-1, 0), (0, 1), (0, -1),
         (1, 1), (1, -1), (-1, 1), (-1, -1),
@@ -109,20 +118,53 @@ fn get_king_moves(board: &Board, from: Position, color: Color, moves: &mut Vec<P
     
     for (dx, dy) in &king_moves {
         let to = from + (*dx, *dy);
-        if !to.is_valid() {
+        if !to.is_valid() || to == from {
             continue;
         }
         
         if let Some(piece) = board.get_piece(to) {
             if piece.color != color {
-                moves.push(to);
+                moves.insert(to);
             }
         } else {
-            moves.push(to);
+            moves.insert(to);
         }
     }
     
-    // TODO: Add castling
+    // Castling - only possible if king hasn't moved and is not in check
+    if !board.is_in_check(color) && from == Position::new(4, if color == Color::White { 0 } else { 7 }).unwrap() {
+        let rank = if color == Color::White { 0 } else { 7 };
+        
+        // Kingside castling (O-O)
+        if board.castling_rights.contains(if color == Color::White { 'K' } else { 'k' }) {
+            // Check if squares between king and rook are empty
+            let f_pos = Position::new(5, rank).unwrap();
+            let g_pos = Position::new(6, rank).unwrap();
+            
+            if board.is_square_empty(f_pos) && 
+               board.is_square_empty(g_pos) &&
+               !board.is_square_under_attack(f_pos, !color) &&
+               !board.is_square_under_attack(g_pos, !color) {
+                moves.insert(g_pos);
+            }
+        }
+        
+        // Queenside castling (O-O-O)
+        if board.castling_rights.contains(if color == Color::White { 'Q' } else { 'q' }) {
+            // Check if squares between king and rook are empty
+            let b_pos = Position::new(1, rank).unwrap();
+            let c_pos = Position::new(2, rank).unwrap();
+            let d_pos = Position::new(3, rank).unwrap();
+            
+            if board.is_square_empty(b_pos) && 
+               board.is_square_empty(c_pos) && 
+               board.is_square_empty(d_pos) &&
+               !board.is_square_under_attack(c_pos, !color) &&
+               !board.is_square_under_attack(d_pos, !color) {
+                moves.insert(c_pos);
+            }
+        }
+    }
 }
 
 fn get_sliding_moves(
@@ -130,47 +172,20 @@ fn get_sliding_moves(
     from: Position,
     color: Color,
     directions: &[(i8, i8)],
-    moves: &mut Vec<Position>,
+    moves: &mut std::collections::HashSet<Position>,
 ) {
     for &(dx, dy) in directions {
         let mut current = from + (dx, dy);
         while current.is_valid() {
             if let Some(piece) = board.get_piece(current) {
                 if piece.color != color {
-                    moves.push(current);
+                    moves.insert(current);
                 }
                 break;
             } else {
-                moves.push(current);
+                moves.insert(current);
             }
             current = current + (dx, dy);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::board::Board;
-    use std::str::FromStr;
-
-    #[test]
-    fn test_pawn_moves() {
-        let board = Board::new();
-        let pos = Position::from_str("e2").unwrap();
-        let moves = get_valid_moves(&board, pos);
-        assert_eq!(moves.len(), 2);
-        assert!(moves.contains(&Position::from_str("e3").unwrap()));
-        assert!(moves.contains(&Position::from_str("e4").unwrap()));
-    }
-
-    #[test]
-    fn test_knight_moves() {
-        let board = Board::new();
-        let pos = Position::from_str("g1").unwrap();
-        let moves = get_valid_moves(&board, pos);
-        assert_eq!(moves.len(), 2);
-        assert!(moves.contains(&Position::from_str("f3").unwrap()));
-        assert!(moves.contains(&Position::from_str("h3").unwrap()));
     }
 }

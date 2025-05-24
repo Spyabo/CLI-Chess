@@ -1,9 +1,8 @@
-use std::collections::HashSet;
 use anyhow::{Result, Context};
 use std::time::Instant;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind},
+    event::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     execute,
     terminal::{enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode},
 };
@@ -20,7 +19,6 @@ use crate::{
     pieces::{Color as PieceColor, PieceType},
 };
 
-// Using anyhow::Result consistently throughout the crate
 type TuiResult<T> = Result<T, anyhow::Error>;
 
 pub struct Tui {
@@ -56,15 +54,7 @@ impl Tui {
         
         while !self.should_quit {
             self.draw(game_state)?;
-            
-            // Handle input
-            if let Err(e) = self.handle_input(game_state) {
-                if e.to_string() == "User quit" {
-                    break;
-                } else {
-                    return Err(e);
-                }
-            }
+            self.handle_input(game_state)?;
         }
         
         self.cleanup()
@@ -72,26 +62,21 @@ impl Tui {
     
     fn setup(&mut self) -> TuiResult<()> {
         enable_raw_mode().context("Failed to enable raw mode")?;
-        execute!(
-            std::io::stderr(),
-            EnterAlternateScreen,
-        ).context("Failed to enter alternate screen")?;
+        execute!(std::io::stderr(), EnterAlternateScreen)
+            .context("Failed to enter alternate screen")?;
         self.terminal.clear().context("Failed to clear terminal")?;
         Ok(())
     }
     
     pub fn cleanup(&mut self) -> TuiResult<()> {
-        disable_raw_mode().context("Failed to disable raw mode")?;
-        execute!(
-            std::io::stderr(),
-            LeaveAlternateScreen,
-        ).context("Failed to leave alternate screen")?;
+        disable_raw_mode()?;
+        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
         self.terminal.show_cursor().context("Failed to show cursor")?;
         Ok(())
     }
     
     pub fn draw(&mut self, game_state: &GameState) -> TuiResult<()> {
-        // Clear any expired status message
+        // Clear expired status message
         if let Some(timer) = self.status_timer {
             if timer.elapsed().as_secs() >= 5 {
                 self.status_message.clear();
@@ -99,55 +84,66 @@ impl Tui {
             }
         }
         
-        // Create the board widget before the draw closure
-        let board = self.create_board_widget(game_state);
-        let status = self.status_message.clone();
+        // Extract the data we need before borrowing terminal mutably
+        let cursor_position = self.cursor_position;
+        let selected_piece = self.selected_piece;
+        let possible_moves = self.possible_moves.clone();
+        let status_text = self.get_status_text();
         
         self.terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(1)
-                .constraints(
-                    [
-                        Constraint::Length(3),
-                        Constraint::Percentage(80),
-                        Constraint::Length(3),
-                    ]
-                    .as_ref(),
-                )
-                .split(f.size());
-
-            // Title
+            // Create widgets inside the draw closure using extracted data
+            let board = Self::create_board_widget_static(
+                game_state, 
+                cursor_position, 
+                selected_piece, 
+                &possible_moves
+            );
             let title = Paragraph::new("CLI Chess (Q to quit, R to reset, M to toggle mouse)")
                 .style(Style::default().add_modifier(Modifier::BOLD))
                 .alignment(ratatui::layout::Alignment::Center);
-            f.render_widget(title, chunks[0]);
-
-            // Board
-            f.render_widget(board, chunks[1]);
-
-            // Status bar
-            // Add current position to status
-            let status_with_pos = if !status.is_empty() {
-                format!("{} | Cursor: {}", status, self.cursor_position)
-            } else {
-                format!("Cursor: {}", self.cursor_position)
-            };
-            
-            let status_bar = Paragraph::new(status_with_pos)
+            let status_bar = Paragraph::new(status_text.clone())
                 .style(Style::default())
                 .alignment(ratatui::layout::Alignment::Left);
+            
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Percentage(80),
+                    Constraint::Length(3),
+                ])
+                .split(f.size());
+
+            // Render all widgets
+            f.render_widget(title, chunks[0]);
+            f.render_widget(board, chunks[1]);
             f.render_widget(status_bar, chunks[2]);
         })?;
         Ok(())
     }
 
-    fn create_board_widget(&self, game_state: &GameState) -> impl ratatui::widgets::Widget {
-        // Convert the board to a 2D array of cells
+    fn handle_input(&mut self, game_state: &mut GameState) -> TuiResult<()> {
+        if crossterm::event::poll(std::time::Duration::from_millis(100))? {
+            match crossterm::event::read()? {
+                Event::Key(key) => self.handle_key_event(key, game_state)?,
+                Event::Mouse(mouse) => self.handle_mouse_event(mouse, game_state)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn create_board_widget_static<'a>(
+        game_state: &'a GameState,
+        cursor_position: Position,
+        selected_piece: Option<Position>,
+        possible_moves: &'a [Move],
+    ) -> Table<'a> {
         let mut rows = Vec::with_capacity(9);
         
         // Add column labels (a-h)
-        let mut header = vec![Cell::from(" ".to_string())];
+        let mut header = vec![Cell::from(" ")];
         for c in b'a'..=b'h' {
             header.push(Cell::from((c as char).to_string()));
         }
@@ -161,66 +157,13 @@ impl Tui {
             
             for col in 0..8 {
                 let pos = Position::from_xy(col, row).unwrap();
-                
-                let mut cell_style = if (row + col) % 2 == 0 {
-                    Style::default().bg(Color::Rgb(180, 140, 100)) // Light squares
-                } else {
-                    Style::default().bg(Color::Rgb(100, 60, 30))  // Dark squares
-                };
-                
-                // Highlight cursor position with a more visible style
-                if pos == self.cursor_position {
-                    cell_style = cell_style
-                        .bg(Color::Rgb(80, 80, 200))  // Blue background for cursor
-                        .add_modifier(Modifier::BOLD);
-                }
-                
-                // Calculate background color based on position (checkerboard pattern)
-                let bg_color = if (row + col) % 2 == 0 {
-                    Color::Rgb(139, 69, 19) // Dark brown
-                } else {
-                    Color::Rgb(245, 222, 179) // Light brown (wheat)
-                };
-                
-                // Apply the background color to the cell style
-                cell_style = cell_style.bg(bg_color);
-                
-                let cell = if let Some(p) = game_state.board.get_piece(pos) {
-                    let symbol = match p.piece_type {
-                        PieceType::Pawn => if p.color == PieceColor::White { "♙" } else { "♟" },
-                        PieceType::Knight => if p.color == PieceColor::White { "♘" } else { "♞" },
-                        PieceType::Bishop => if p.color == PieceColor::White { "♗" } else { "♝" },
-                        PieceType::Rook => if p.color == PieceColor::White { "♖" } else { "♜" },
-                        PieceType::Queen => if p.color == PieceColor::White { "♕" } else { "♛" },
-                        PieceType::King => if p.color == PieceColor::White { "♔" } else { "♚" },
-                        PieceType::Empty => " ",
-                    };
-                    
-                    let mut piece_style = cell_style
-                        .fg(if p.color == PieceColor::White { Color::White } else { Color::Black });
-                    
-                    if let Some(selected_pos) = self.selected_piece {
-                        if selected_pos == pos {
-                            piece_style = Style::default()
-                                .fg(if p.color == PieceColor::White { Color::White } else { Color::Black })
-                                .bg(Color::Rgb(70, 130, 180));
-                        } else if self.possible_moves.iter().any(|m| m.to == pos) {
-                            piece_style = Style::default()
-                                .fg(if p.color == PieceColor::White { Color::White } else { Color::Black })
-                                .bg(Color::Rgb(0, 100, 0));
-                        }
-                    }
-                    
-                    Cell::from(symbol).style(piece_style)
-                } else {
-                    let mut empty_cell_style = cell_style;
-                    if let Some(_) = self.selected_piece {
-                        if self.possible_moves.iter().any(|m| m.to == pos) {
-                            empty_cell_style = Style::default().bg(Color::Rgb(0, 100, 0));
-                        }
-                    }
-                    Cell::from("  ").style(empty_cell_style)
-                };
+                let cell = Self::create_board_cell_static(
+                    pos, 
+                    game_state, 
+                    cursor_position, 
+                    selected_piece, 
+                    possible_moves
+                );
                 cells.push(cell);
             }
             rows.push(Row::new(cells).height(1));
@@ -241,202 +184,274 @@ impl Tui {
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
     }
 
-    pub fn handle_input(&mut self, game_state: &mut GameState) -> TuiResult<()> {
-        if event::poll(std::time::Duration::from_millis(100))? {
-            match event::read()? {
-                Event::Key(key) => self.handle_key_event(key, game_state)?,
-                Event::Mouse(mouse) if self.mouse_enabled => self.handle_mouse_event(mouse, game_state)?,
-                _ => {}
-            }
+    fn create_board_cell_static<'a>(
+        pos: Position,
+        game_state: &'a GameState,
+        cursor_position: Position,
+        selected_piece: Option<Position>,
+        possible_moves: &'a [Move],
+    ) -> Cell<'a> {
+        let is_light_square = (pos.x + pos.y) % 2 == 1;
+        let mut cell_style = if is_light_square {
+            Style::default().bg(Color::Rgb(245, 222, 179)) // Light squares
+        } else {
+            Style::default().bg(Color::Rgb(139, 69, 19))   // Dark squares
+        };
+
+        // Highlight cursor position
+        if pos == cursor_position {
+            cell_style = Style::default()
+                .bg(Color::Rgb(80, 80, 200))
+                .add_modifier(Modifier::BOLD);
         }
-        
-        // Clear status message after 3 seconds
-        if let Some(timer) = self.status_timer {
-            if timer.elapsed() > std::time::Duration::from_secs(3) {
-                self.status_message.clear();
-                self.status_timer = None;
+
+        // Get piece symbol and apply styling
+        if let Some(piece) = game_state.board.get_piece(pos) {
+            let symbol = Self::get_piece_symbol(piece.piece_type, piece.color);
+            let mut piece_style = cell_style
+                .fg(if piece.color == PieceColor::White { Color::White } else { Color::Black });
+            
+            // Highlight king in check
+            if piece.piece_type == PieceType::King 
+                && game_state.check 
+                && piece.color == game_state.active_color {
+                piece_style = Style::default()
+                    .bg(Color::Rgb(200, 50, 50))
+                    .fg(if piece.color == PieceColor::White { Color::White } else { Color::Black })
+                    .add_modifier(Modifier::BOLD);
             }
+            
+            // Highlight selected piece and possible moves
+            if let Some(selected_pos) = selected_piece {
+                if selected_pos == pos {
+                    piece_style = piece_style.bg(Color::Rgb(70, 130, 180));
+                } else if possible_moves.iter().any(|m| m.to == pos) {
+                    piece_style = piece_style.bg(Color::Rgb(0, 100, 0));
+                }
+            }
+            
+            Cell::from(symbol).style(piece_style)
+        } else {
+            // Empty square
+            let mut empty_style = cell_style;
+            if selected_piece.is_some() {
+                if possible_moves.iter().any(|m| m.to == pos) {
+                    empty_style = Style::default().bg(Color::Rgb(0, 100, 0));
+                }
+            }
+            Cell::from("  ").style(empty_style)
         }
-        
-        Ok(())
+    }
+
+    fn get_piece_symbol(piece_type: PieceType, color: PieceColor) -> &'static str {
+        match piece_type {
+            PieceType::Pawn => if color == PieceColor::White { "♙" } else { "♟" },
+            PieceType::Knight => if color == PieceColor::White { "♘" } else { "♞" },
+            PieceType::Bishop => if color == PieceColor::White { "♗" } else { "♝" },
+            PieceType::Rook => if color == PieceColor::White { "♖" } else { "♜" },
+            PieceType::Queen => if color == PieceColor::White { "♕" } else { "♛" },
+            PieceType::King => if color == PieceColor::White { "♔" } else { "♚" },
+            PieceType::Empty => " ",
+        }
+    }
+
+    fn get_status_text(&self) -> String {
+        if !self.status_message.is_empty() {
+            format!("{} | Cursor: {}", self.status_message, self.cursor_position)
+        } else {
+            format!("Cursor: {}", self.cursor_position)
+        }
     }
     
-    fn handle_key_event(
-        &mut self,
-        key: KeyEvent,
-        game_state: &mut GameState,
-    ) -> TuiResult<()> {
+    fn handle_key_event(&mut self, key: KeyEvent, game_state: &mut GameState) -> TuiResult<()> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 if self.selected_piece.is_some() {
-                    // Deselect piece if one is selected
-                    self.selected_piece = None;
-                    self.possible_moves.clear();
-                    self.set_status("Deselected piece".to_string());
+                    self.deselect_piece();
                 } else {
                     self.should_quit = true;
                 }
             }
             KeyCode::Char('r') => {
-                *game_state = GameState::new();
-                self.selected_piece = None;
-                self.possible_moves.clear();
-                self.set_status("Game reset".to_string());
+                self.reset_game(game_state);
             }
             KeyCode::Char('m') => {
-                self.mouse_enabled = !self.mouse_enabled;
-                self.set_status(format!(
-                    "Mouse {}", 
-                    if self.mouse_enabled { "enabled" } else { "disabled" }
-                ));
+                self.toggle_mouse();
             }
-            KeyCode::Up => {
-                if self.cursor_position.y < 7 {
-                    self.cursor_position.y += 1;
-                }
-            }
-            KeyCode::Down => {
-                if self.cursor_position.y > 0 {
-                    self.cursor_position.y -= 1;
-                }
-            }
-            KeyCode::Left => {
-                if self.cursor_position.x > 0 {
-                    self.cursor_position.x -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if self.cursor_position.x < 7 {
-                    self.cursor_position.x += 1;
-                }
-            }
+            KeyCode::Up => self.move_cursor(0, 1),
+            KeyCode::Down => self.move_cursor(0, -1),
+            KeyCode::Left => self.move_cursor(-1, 0),
+            KeyCode::Right => self.move_cursor(1, 0),
             KeyCode::Enter => {
-                if let Some(_selected_pos) = self.selected_piece {
-                    // Check if the cursor is on a valid move
-                    if let Some(mv) = self.possible_moves.iter()
-                        .find(|m| m.to == self.cursor_position) {
-                        // Make the move
-                        if game_state.board.move_piece(mv.from, mv.to).is_ok() {
-                            self.set_status(format!("Moved {}", mv));
-                            // Switch player
-                            game_state.active_color = match game_state.active_color {
-                                PieceColor::White => PieceColor::Black,
-                                PieceColor::Black => PieceColor::White,
-                            };
-                        }
-                    }
-                    // Deselect the piece after attempting to move
-                    self.selected_piece = None;
-                    self.possible_moves.clear();
-                } else {
-                    // Select the piece at cursor
-                    if let Some(piece) = game_state.board.get_piece(self.cursor_position) {
-                        if piece.color == game_state.active_color {
-                            self.selected_piece = Some(self.cursor_position);
-                            // Get all legal moves for this piece
-                            self.possible_moves = game_state.board.get_legal_moves(self.cursor_position)
-                                .into_iter()
-                                .map(|to| Move {
-                                    from: self.cursor_position,
-                                    to,
-                                    promotion: None, // Handle promotions later
-                                })
-                                .collect();
-                            self.set_status(format!("Selected {} at {}", piece, self.cursor_position));
-                        }
-                    }
-                }
+                self.handle_enter_key(game_state)?;
             }
             _ => {}
         }
-        
         Ok(())
-    }    
-        
-    fn set_status(&mut self, message: String) {
-        self.status_message = message;
-        self.status_timer = Some(Instant::now());
     }
-    
-    fn handle_mouse_event(
-        &mut self, 
-        mouse: MouseEvent, 
-        game_state: &mut GameState,
-    ) -> TuiResult<()> {
-        // Don't process mouse events if the game is over
-        if game_state.checkmate || game_state.stalemate {
-            return Ok(());
-        }
 
-        if !self.mouse_enabled || mouse.kind != MouseEventKind::Down(MouseButton::Left) {
-            return Ok(());
-        }
+    fn deselect_piece(&mut self) {
+        self.selected_piece = None;
+        self.possible_moves.clear();
+        self.set_status("Deselected piece".to_string());
+    }
 
-        // Get terminal size to calculate board position
-        let term_size = self.terminal.size()?;
-        let board_start_x = (term_size.width.saturating_sub(16)) / 2; // Center the board (16 chars wide)
-        let board_start_y = (term_size.height.saturating_sub(8)) / 2; // Center vertically (8 rows)
+    fn reset_game(&mut self, game_state: &mut GameState) {
+        *game_state = GameState::new();
+        self.selected_piece = None;
+        self.possible_moves.clear();
+        self.set_status("Game reset".to_string());
+    }
+
+    fn toggle_mouse(&mut self) {
+        self.mouse_enabled = !self.mouse_enabled;
+        self.set_status(format!(
+            "Mouse {}", 
+            if self.mouse_enabled { "enabled" } else { "disabled" }
+        ));
+    }
+
+    fn move_cursor(&mut self, dx: i8, dy: i8) {
+        let new_x = (self.cursor_position.x as i8 + dx).clamp(0, 7);
+        let new_y = (self.cursor_position.y as i8 + dy).clamp(0, 7);
         
-        // Calculate board coordinates (0-7)
-        let board_x = (mouse.column.saturating_sub(board_start_x) / 2) as i8; // Each square is 2 chars wide
-        let board_y = (7 - (mouse.row.saturating_sub(board_start_y))) as i8; // Invert Y axis (0 is bottom)
-        
-        // Check if click is within board bounds
-        if board_x < 0 || board_x > 7 || board_y < 0 || board_y > 7 {
-            return Ok(());
+        if let Some(new_pos) = Position::new(new_x, new_y) {
+            self.cursor_position = new_pos;
         }
-        
-        let pos = match Position::from_xy(board_x, board_y) {
-            Some(p) => p,
-            None => return Ok(()),
-        };
-        
-        // Handle piece selection/move
-        if let Some(selected_pos) = game_state.selected_square {
+    }
+
+    fn handle_enter_key(&mut self, game_state: &mut GameState) -> TuiResult<()> {
+        if let Some(_selected_pos) = self.selected_piece {
             // Try to make a move
-            match game_state.make_move(selected_pos, pos) {
-                Ok(_) => {
-                    // Update status based on game state
-                    if game_state.checkmate {
-                        let winner = if game_state.active_color == PieceColor::White { "Black" } else { "White" };
-                        self.set_status(format!("Checkmate! {} wins!", winner));
-                    } else if game_state.stalemate {
-                        self.set_status("Stalemate! It's a draw!".to_string());
-                    } else if game_state.check {
-                        self.set_status(format!("{} is in check!", 
-                            if game_state.active_color == PieceColor::White { "White" } else { "Black" }));
-                    } else {
-                        self.set_status(format!("{}'s turn", 
-                            if game_state.active_color == PieceColor::White { "White" } else { "Black" }));
-                    }
-                }
-                Err(e) => {
-                    self.set_status(format!("Invalid move: {}", e));
-                    game_state.selected_square = None;
-                    game_state.valid_moves.clear();
+            if let Some(mv) = self.possible_moves.iter()
+                .find(|m| m.to == self.cursor_position) {
+                if game_state.board.move_piece(mv.from, mv.to).is_ok() {
+                    self.set_status(format!("Moved {}", mv));
+                    self.switch_turn(game_state);
                 }
             }
-        } else if let Some(piece) = game_state.board.get_piece(pos) {
-            // Select a piece if it's the player's turn and the piece is theirs
+            self.deselect_piece();
+        } else {
+            // Select piece at cursor
+            self.try_select_piece_at_cursor(game_state);
+        }
+        Ok(())
+    }
+
+    fn try_select_piece_at_cursor(&mut self, game_state: &GameState) {
+        if let Some(piece) = game_state.board.get_piece(self.cursor_position) {
+            if piece.color == game_state.active_color {
+                self.selected_piece = Some(self.cursor_position);
+                self.possible_moves = game_state.board.get_legal_moves(self.cursor_position)
+                    .into_iter()
+                    .map(|to| Move {
+                        from: self.cursor_position,
+                        to,
+                        promotion: None,
+                    })
+                    .collect();
+                self.set_status(format!("Selected {} at {}", piece, self.cursor_position));
+            }
+        }
+    }
+
+    fn switch_turn(&mut self, game_state: &mut GameState) {
+        game_state.active_color = match game_state.active_color {
+            PieceColor::White => PieceColor::Black,
+            PieceColor::Black => PieceColor::White,
+        };
+    }
+
+    fn handle_mouse_event(&mut self, mouse: MouseEvent, game_state: &mut GameState) -> TuiResult<()> {
+        if game_state.checkmate || game_state.stalemate || !self.mouse_enabled {
+            return Ok(());
+        }
+
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return Ok(());
+        }
+
+        if let Some(pos) = self.calculate_board_position(mouse) {
+            self.handle_square_click(pos, game_state)?;
+        }
+
+        self.status_timer = Some(Instant::now());
+        Ok(())
+    }
+
+    fn calculate_board_position(&self, mouse: MouseEvent) -> Option<Position> {
+        let term_size = self.terminal.size().ok()?;
+        let board_width = 8 * 4;
+        let board_height = 8 * 2;
+        
+        let board_x = (term_size.width.saturating_sub(board_width as u16)) / 2;
+        let board_y = (term_size.height.saturating_sub(board_height as u16)) / 2;
+        
+        let clicked_col = (mouse.column.saturating_sub(board_x)) / 4;
+        let clicked_row = 7 - (mouse.row.saturating_sub(board_y)) / 2;
+        
+        if clicked_col >= 8 || clicked_row >= 8 {
+            return None;
+        }
+        
+        Position::new(clicked_col as i8, clicked_row as i8)
+    }
+
+    fn handle_square_click(&mut self, pos: Position, game_state: &mut GameState) -> TuiResult<()> {
+        if let Some(selected_pos) = game_state.selected_square {
+            if game_state.valid_moves.contains(&pos) {
+                // Create move manually since Move::new doesn't exist
+                let mv = Move {
+                    from: selected_pos,
+                    to: pos,
+                    promotion: None,
+                };
+                // Use make_move to ensure proper game state management
+                if game_state.make_move(mv.from, mv.to).is_ok() {
+                    self.switch_turn(game_state);
+                }
+            } else {
+                self.try_select_new_piece(pos, game_state);
+            }
+        } else {
+            self.try_select_piece(pos, game_state);
+        }
+        Ok(())
+    }
+
+    fn try_select_new_piece(&mut self, pos: Position, game_state: &mut GameState) {
+        if let Some(piece) = game_state.board.get_piece(pos) {
             if piece.color == game_state.active_color {
                 game_state.selected_square = Some(pos);
-                // Get legal moves for the selected piece
                 game_state.valid_moves = game_state.board.get_legal_moves(pos);
                 
-                // Filter out moves that would leave the king in check
-                let mut legal_moves = HashSet::new();
-                for &target_pos in &game_state.valid_moves {
-                    let mut test_board = game_state.board.clone();
-                    if test_board.move_piece(pos, target_pos).is_ok() {
-                        // Check if the move leaves the king in check
-                        if let Some(king_pos) = test_board.get_king_position(piece.color) {
-                            if !test_board.is_square_under_attack(king_pos, !piece.color) {
-                                legal_moves.insert(target_pos);
-                            }
-                        }
-                    }
+                if game_state.valid_moves.is_empty() {
+                    self.set_status("No legal moves for selected piece".to_string());
+                    game_state.selected_square = None;
                 }
-                game_state.valid_moves = legal_moves;
+            }
+        } else {
+            game_state.selected_square = None;
+            game_state.valid_moves.clear();
+        }
+    }
+
+    fn try_select_piece(&mut self, pos: Position, game_state: &mut GameState) {
+        if let Some(piece) = game_state.board.get_piece(pos) {
+            if piece.color == game_state.active_color {
+                use crate::moves::get_valid_moves;
+                
+                game_state.selected_square = Some(pos);
+                game_state.valid_moves = get_valid_moves(&game_state.board, pos);
+                
+                // Filter out moves that would put the king in check
+                let current_moves = game_state.valid_moves.clone();
+                game_state.valid_moves = current_moves.into_iter()
+                    .filter(|&to| {
+                        let mut board_clone = game_state.board.clone();
+                        board_clone.move_piece(pos, to).is_ok()
+                    })
+                    .collect();
                 
                 if game_state.valid_moves.is_empty() {
                     self.set_status("No legal moves for selected piece".to_string());
@@ -445,14 +460,12 @@ impl Tui {
             } else {
                 self.set_status("It's not your turn to move that piece".to_string());
             }
-        } else {
-            // Clicked on empty square with no piece selected
-            game_state.selected_square = None;
-            game_state.valid_moves.clear();
         }
+    }
         
+    fn set_status(&mut self, message: String) {
+        self.status_message = message;
         self.status_timer = Some(Instant::now());
-        Ok(())
     }
 }
 
