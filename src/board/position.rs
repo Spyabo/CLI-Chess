@@ -44,14 +44,6 @@ impl Position {
         }
     }
     
-    pub fn is_valid_file(file: i8) -> bool {
-        (0..8).contains(&file)
-    }
-    
-    pub fn is_valid_rank(rank: i8) -> bool {
-        (0..8).contains(&rank)
-    }
-
     pub fn from_notation(notation: &str) -> Result<Self, PositionError> {
         if notation.len() != 2 {
             return Err(PositionError::InvalidPosition(
@@ -105,50 +97,6 @@ impl FromStr for Position {
 impl fmt::Display for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_notation())
-    }
-}
-
-impl Position {
-    pub fn distance(&self, other: &Position) -> (i8, i8) {
-        (other.x - self.x, other.y - self.y)
-    }
-    
-    pub fn is_adjacent(&self, other: &Position) -> bool {
-        let (dx, dy) = self.distance(other);
-        dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0)
-    }
-    
-    pub fn is_straight_line(&self, other: &Position) -> bool {
-        self.x == other.x || self.y == other.y
-    }
-    
-    pub fn is_diagonal(&self, other: &Position) -> bool {
-        let (dx, dy) = self.distance(other);
-        dx.abs() == dy.abs() && dx != 0
-    }
-    
-    pub fn squares_between(&self, other: &Position) -> Vec<Position> {
-        let mut squares = Vec::new();
-        let (dx, dy) = (other.x - self.x, other.y - self.y);
-        
-        if dx == 0 && dy == 0 {
-            return squares;
-        }
-        
-        let step_x = dx.signum();
-        let step_y = dy.signum();
-        
-        let mut current = *self;
-        current.x += step_x;
-        current.y += step_y;
-        
-        while current != *other {
-            squares.push(current);
-            current.x += step_x;
-            current.y += step_y;
-        }
-        
-        squares
     }
 }
 
