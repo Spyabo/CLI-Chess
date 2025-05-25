@@ -90,6 +90,28 @@ impl Piece {
         Some(Self::new(piece_type, color))
     }
 
+    /// Convert the piece to its FEN character representation
+    pub fn to_char(&self) -> char {
+        if self.piece_type == PieceType::Empty {
+            return ' ';
+        }
+        
+        let c = match self.piece_type {
+            PieceType::Pawn => 'p',
+            PieceType::Rook => 'r',
+            PieceType::Knight => 'n',
+            PieceType::Bishop => 'b',
+            PieceType::Queen => 'q',
+            PieceType::King => 'k',
+            PieceType::Empty => ' ', // This case is already handled above
+        };
+        
+        match self.color {
+            Color::White => c.to_ascii_uppercase(),
+            Color::Black => c,
+        }
+    }
+    
     pub fn to_unicode(&self) -> &'static str {
         if self.piece_type == PieceType::Empty {
             return " ";
