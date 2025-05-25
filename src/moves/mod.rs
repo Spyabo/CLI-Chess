@@ -122,12 +122,15 @@ pub fn get_king_moves(board: &Board, from: Position, color: Color, moves: &mut s
             continue;
         }
         
-        if let Some(piece) = board.get_piece(to) {
-            if piece.color != color {
+        // Only allow the move if the destination square is not under attack
+        if !board.is_square_under_attack(to, !color) {
+            if let Some(piece) = board.get_piece(to) {
+                if piece.color != color {
+                    moves.insert(to);
+                }
+            } else {
                 moves.insert(to);
             }
-        } else {
-            moves.insert(to);
         }
     }
     
