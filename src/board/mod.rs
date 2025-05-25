@@ -5,11 +5,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 
-use crate::pieces::{Color, Piece, PieceType};
 use crate::moves;
+use crate::pieces::{Color, Piece, PieceType};
 pub use position::Position;
-
-// use crate::moves;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Move {
@@ -33,6 +31,7 @@ pub struct GameState {
     pub stalemate: bool,
     pub selected_square: Option<Position>,
     pub valid_moves: HashSet<Position>,
+    pub position_history: HashMap<String, u8>,
 }
 
 impl Default for GameState {
@@ -40,7 +39,7 @@ impl Default for GameState {
         let mut board = Board::default();
         board.load_fen(STARTING_FEN).expect("Failed to load starting position");
         
-        GameState {
+        let mut game_state = GameState {
             board,
             active_color: Color::White,
             check: false,
@@ -48,7 +47,11 @@ impl Default for GameState {
             stalemate: false,
             selected_square: None,
             valid_moves: HashSet::new(),
-        }
+            position_history: HashMap::new(),
+        };
+        
+        game_state.record_position();
+        game_state
     }
 }
 
@@ -65,7 +68,11 @@ impl GameState {
             check: false,
             checkmate: false,
             stalemate: false,
+            position_history: HashMap::new(),
         };
+        
+        // Record the initial position
+        game_state.record_position();
         
         // Update the game state based on the initial position
         game_state.update_state();
@@ -84,6 +91,7 @@ impl GameState {
             check: false,
             checkmate: false,
             stalemate: false,
+            position_history: HashMap::new(),
         };
         
         // Update the game state based on the FEN position
@@ -91,7 +99,7 @@ impl GameState {
         Ok(game_state)
     }
     
-    /// Updates the game state (check, checkmate, stalemate)
+    /// Updates the game state (check, checkmate, stalemate, threefold repetition)
     fn update_state(&mut self) {
         // Update check status
         self.check = self.board.is_in_check(self.active_color);
@@ -113,13 +121,15 @@ impl GameState {
             self.valid_moves.clear();
         }
         
-        // Check for checkmate/stalemate
+        // Check for checkmate/stalemate/threefold repetition
         if !self.has_any_legal_moves() {
             if self.board.is_in_check(self.active_color) {
                 self.checkmate = true;
             } else {
                 self.stalemate = true;
             }
+        } else if self.is_threefold_repetition() {
+            self.stalemate = true;
         } else {
             self.checkmate = false;
             self.stalemate = false;
@@ -144,6 +154,10 @@ impl GameState {
         // Save the current state for potential undo
         let original_state = self.board.clone();
         
+        // Check if this is a capture or pawn move (which reset the position history)
+        let is_reset_move = self.board.get_piece(to).is_some() || 
+                           matches!(self.board.get_piece(from), Some(p) if p.piece_type == PieceType::Pawn);
+        
         // Try to make the move
         if let Err(e) = self.board.move_piece(from, to) {
             return Err(e);
@@ -151,6 +165,12 @@ impl GameState {
         
         // Toggle the active color
         self.active_color = !self.active_color;
+        
+        // Update the position history
+        if is_reset_move {
+            self.position_history.clear();
+        }
+        self.record_position();
         
         // Update the game state
         self.update_state();
@@ -168,6 +188,17 @@ impl GameState {
         self.valid_moves.clear();
         
         Ok(())
+    }
+    
+    /// Records the current position in the position history
+    fn record_position(&mut self) {
+        let fen = self.board.to_fen();
+        *self.position_history.entry(fen).or_insert(0) += 1;
+    }
+    
+    /// Checks if the current position has occurred three times
+    pub fn is_threefold_repetition(&self) -> bool {
+        self.position_history.values().any(|&count| count >= 3)
     }
 }
 
@@ -197,6 +228,62 @@ impl Default for Board {
 }
 
 impl Board {
+    /// Convert the current board state to FEN notation
+    pub fn to_fen(&self) -> String {
+        let mut fen_parts = Vec::new();
+        
+        // 1. Piece placement data
+        let mut fen_placement = String::new();
+        for rank in (0..8).rev() {
+            let mut empty_squares = 0;
+            let mut rank_str = String::new();
+            
+            for file in 0..8 {
+                if let Some(pos) = Position::from_xy(file, rank) {
+                    if let Some(piece) = self.get_piece(pos) {
+                        if empty_squares > 0 {
+                            rank_str.push_str(&empty_squares.to_string());
+                            empty_squares = 0;
+                        }
+                        rank_str.push(piece.to_char());
+                    } else {
+                        empty_squares += 1;
+                    }
+                }
+            }
+            
+            if empty_squares > 0 {
+                rank_str.push_str(&empty_squares.to_string());
+            }
+            
+            fen_placement.push_str(&rank_str);
+            if rank > 0 {
+                fen_placement.push('/');
+            }
+        }
+        fen_parts.push(fen_placement);
+        
+        // 2. Active color
+        fen_parts.push(if self.active_color == Color::White { "w".to_string() } else { "b".to_string() });
+        
+        // 3. Castling availability
+        fen_parts.push(if self.castling_rights.is_empty() { "-".to_string() } else { self.castling_rights.clone() });
+        
+        // 4. En passant target square
+        fen_parts.push(
+            self.en_passant_target
+                .map(|pos| pos.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        );
+        
+        // 5. Halfmove clock (50-move rule)
+        fen_parts.push(self.halfmove_clock.to_string());
+        
+        // 6. Fullmove number
+        fen_parts.push(self.fullmove_number.to_string());
+        
+        fen_parts.join(" ")
+    }
     pub fn load_fen(&mut self, fen: &str) -> Result<(), String> {
         let parts: Vec<&str> = fen.split_whitespace().collect();
         if parts.is_empty() {
@@ -279,100 +366,73 @@ impl Board {
     }
     
     pub fn is_square_under_attack(&self, pos: Position, by_color: Color) -> bool {
-        use PieceType::*;
-        
-        let pos_x = pos.file() as i8;
-        let pos_y = pos.rank() as i8;
-        
         // Check for pawn attacks
-        let pawn_rank_offset = if by_color == Color::White { 1 } else { -1 };
-        for file_offset in [-1, 1] {
-            let x = pos_x + file_offset;
-            let y = pos_y + pawn_rank_offset;
-            
-            if x >= 0 && x < 8 && y >= 0 && y < 8 {
-                if let Some(attack_pos) = Position::new(x, y) {
-                    if let Some(piece) = self.get_piece(attack_pos) {
-                        if piece.piece_type == Pawn && piece.color == by_color {
-                            return true;
-                        }
+        let direction = if by_color == Color::White { 1 } else { -1 };
+        for dx in [-1, 1] {
+            if let Some(attack_pos) = Position::new(
+                (pos.file() as i8 + dx) as i8,
+                (pos.rank() as i8 - direction) as i8
+            ) {
+                if let Some(piece) = self.get_piece(attack_pos) {
+                    if piece.color == by_color && piece.piece_type == PieceType::Pawn {
+                        return true;
                     }
                 }
             }
         }
-        
+
         // Check for knight attacks
-        let knight_offsets = [
-            (2, 1), (2, -1), (-2, 1), (-2, -1),
-            (1, 2), (1, -2), (-1, 2), (-1, -2)
+        let knight_moves = [
+            (1, 2), (2, 1), (2, -1), (1, -2),
+            (-1, -2), (-2, -1), (-2, 1), (-1, 2)
         ];
-        
-        for &(dx, dy) in &knight_offsets {
-            let x = pos_x + dx;
-            let y = pos_y + dy;
-            
-            if x >= 0 && x < 8 && y >= 0 && y < 8 {
-                if let Some(attack_pos) = Position::new(x, y) {
-                    if let Some(piece) = self.get_piece(attack_pos) {
-                        if piece.piece_type == Knight && piece.color == by_color {
-                            return true;
-                        }
+        for &(dx, dy) in &knight_moves {
+            if let Some(attack_pos) = Position::new(
+                (pos.file() as i8 + dx) as i8,
+                (pos.rank() as i8 + dy) as i8
+            ) {
+                if let Some(piece) = self.get_piece(attack_pos) {
+                    if piece.color == by_color && piece.piece_type == PieceType::Knight {
+                        return true;
                     }
                 }
             }
         }
-        
-        // Check for king attacks (distance of 1 in any direction)
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                if dx == 0 && dy == 0 { continue; }
-                
-                let x = pos_x + dx;
-                let y = pos_y + dy;
-                
-                if x >= 0 && x < 8 && y >= 0 && y < 8 {
-                    if let Some(attack_pos) = Position::new(x, y) {
-                        if let Some(piece) = self.get_piece(attack_pos) {
-                            if piece.piece_type == King && piece.color == by_color {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Check for sliding pieces (rook, bishop, queen)
-        let sliding_offsets = [
-            (1, 0), (0, 1), (-1, 0), (0, -1),  // Rook/Queen directions
-            (1, 1), (1, -1), (-1, 1), (-1, -1)  // Bishop/Queen directions
+
+        // Check for sliding pieces (rook, bishop, queen, king)
+        let directions = [
+            // Rook/Queen directions
+            (1, 0), (-1, 0), (0, 1), (0, -1),
+            // Bishop/Queen directions
+            (1, 1), (1, -1), (-1, 1), (-1, -1)
         ];
-        
-        for &(dx, dy) in &sliding_offsets {
-            let mut x = pos_x + dx;
-            let mut y = pos_y + dy;
-            
-            while x >= 0 && x < 8 && y >= 0 && y < 8 {
+
+        for &(dx, dy) in &directions {
+            for step in 1..8 {
+                let x = (pos.file() as i8 + dx * step) as i8;
+                let y = (pos.rank() as i8 + dy * step) as i8;
+                
                 if let Some(attack_pos) = Position::new(x, y) {
                     if let Some(piece) = self.get_piece(attack_pos) {
-                        if piece.color == by_color {
-                            match piece.piece_type {
-                                Rook if dx == 0 || dy == 0 => return true,
-                                Bishop if dx != 0 && dy != 0 => return true,
-                                Queen => return true,
-                                _ => {}
-                            }
+                        if piece.color != by_color {
+                            break; // Blocked by opponent's piece
                         }
-                        break;  // Blocked by a piece
+                        
+                        // Check if this is an attacking piece
+                        match piece.piece_type {
+                            PieceType::Queen => return true,
+                            PieceType::Rook if dx == 0 || dy == 0 => return true,
+                            PieceType::Bishop if dx != 0 && dy != 0 => return true,
+                            PieceType::King if step == 1 => return true,
+                            _ => break, // Not an attacking piece
+                        }
                     }
                 } else {
-                    break;  // Invalid position
+                    break; // Out of board
                 }
-                x += dx;
-                y += dy;
             }
         }
-        
+
         false
     }
     
@@ -455,13 +515,6 @@ impl Board {
             return None;
         }
         self.squares.get(&pos)
-    }
-
-    pub fn get_piece_mut(&mut self, pos: Position) -> Option<&mut Piece> {
-        if !pos.is_valid() {
-            return None;
-        }
-        self.squares.get_mut(&pos)
     }
 
     pub fn set_piece(&mut self, pos: Position, piece: Piece) {

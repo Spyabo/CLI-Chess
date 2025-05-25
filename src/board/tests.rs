@@ -1,6 +1,4 @@
 use super::*;
-use crate::pieces::{Color, PieceType};
-use crate::board::Board;
 
 #[test]
 fn test_initial_board_setup() {
@@ -120,8 +118,6 @@ fn test_king_stalemate() {
     // Verify no legal moves for white
     let white_king_pos = game.board.get_king_position(Color::White).unwrap();
     let king_moves = game.board.get_legal_moves(white_king_pos);
-    println!("White king at: {:?}", white_king_pos);
-    println!("King's legal moves: {:?}", king_moves);
     assert!(king_moves.is_empty(), "King should have no legal moves");
     
     // Verify stalemate is detected
@@ -133,26 +129,26 @@ fn test_king_stalemate() {
 
 #[test]
 fn test_threefold_repetition() {
-    // Stalemate position
     let mut game = GameState::new();
-
-    game.make_move(Position::from_notation("e2").unwrap(), Position::from_notation("e3").unwrap()).unwrap();
-    game.make_move(Position::from_notation("e7").unwrap(), Position::from_notation("e6").unwrap()).unwrap();
-    game.make_move(Position::from_notation("e1").unwrap(), Position::from_notation("e2").unwrap()).unwrap();
-    game.make_move(Position::from_notation("e8").unwrap(), Position::from_notation("e7").unwrap()).unwrap();
-    game.make_move(Position::from_notation("e2").unwrap(), Position::from_notation("e1").unwrap()).unwrap();
-    game.make_move(Position::from_notation("e7").unwrap(), Position::from_notation("e8").unwrap()).unwrap();
-    game.make_move(Position::from_notation("e2").unwrap(), Position::from_notation("e1").unwrap()).unwrap();
-    game.make_move(Position::from_notation("e7").unwrap(), Position::from_notation("e8").unwrap()).unwrap();
     
-    // Verify stalemate is detected
-    assert!(game.stalemate);
-    assert!(!game.check);
-    assert!(!game.checkmate);
+    // Sequence of moves that will lead to the same position three times
+    game.make_move(Position::from_notation("g1").unwrap(), Position::from_notation("f3").unwrap()).unwrap();
+    game.make_move(Position::from_notation("g8").unwrap(), Position::from_notation("f6").unwrap()).unwrap();
     
-    // Verify no legal moves
-    let king_pos = game.board.get_king_position(Color::White).unwrap();
-    assert!(game.board.get_legal_moves(king_pos).is_empty());
+    game.make_move(Position::from_notation("f3").unwrap(), Position::from_notation("g1").unwrap()).unwrap();
+    game.make_move(Position::from_notation("f6").unwrap(), Position::from_notation("g8").unwrap()).unwrap();
+    
+    game.make_move(Position::from_notation("g1").unwrap(), Position::from_notation("f3").unwrap()).unwrap();
+    game.make_move(Position::from_notation("g8").unwrap(), Position::from_notation("f6").unwrap()).unwrap();
+    
+    game.make_move(Position::from_notation("f3").unwrap(), Position::from_notation("g1").unwrap()).unwrap();
+    game.make_move(Position::from_notation("f6").unwrap(), Position::from_notation("g8").unwrap()).unwrap();
+    
+    // At this point, the position has been repeated three times
+    assert!(game.is_threefold_repetition(), "Should detect threefold repetition");
+    assert!(game.stalemate, "Should be stalemate due to threefold repetition");
+    assert!(!game.check, "Should not be in check");
+    assert!(!game.checkmate, "Should not be checkmate");
 }
 
 #[test]
@@ -181,7 +177,7 @@ fn test_castling_rights_after_king_move() {
     board.move_piece(e1, f1).unwrap();
     
     // Verify castling rights are lost after king moves
-    let mut game = GameState { board, ..Default::default() };
+    let game = GameState { board, ..Default::default() };
     assert!(!game.board.castling_rights.contains('K'));
     assert!(!game.board.castling_rights.contains('Q'));
 }
