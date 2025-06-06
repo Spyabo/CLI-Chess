@@ -1,0 +1,22 @@
+[package]
+name = "cli-chess"
+version = "0.1.0"
+edition = "2021"
+description = "A command line chess game implemented in Rust"
+authors = ["Reese Wright"]
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+crossterm = { version = "0.27", features = ["event-stream", "serde"] }
+ratatui = { version = "0.23", features = ["crossterm"] }
+tokio = { version = "1.32", features = ["rt-multi-thread", "time"] }
+strum = { version = "0.25", features = ["derive"] }
+thiserror = "1.0"
+chrono = "0.4"
+log = "0.4"
+simplelog = "0.12"
+
+[dev-dependencies]
+rstest = "0.18"  # For testing
