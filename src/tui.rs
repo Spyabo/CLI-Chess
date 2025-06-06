@@ -88,7 +88,7 @@ impl Tui {
         let cursor_position = self.cursor_position;
         let selected_piece = self.selected_piece;
         let possible_moves = self.possible_moves.clone();
-        let status_text = self.get_status_text();
+        let status_text = self.get_status_text(game_state);
         
         self.terminal.draw(|f| {
             // Create widgets inside the draw closure using extracted data
@@ -255,12 +255,35 @@ impl Tui {
         }
     }
 
-    fn get_status_text(&self) -> String {
+    fn get_status_text(&self, game_state: &GameState) -> String {
+        let mut s = format!("Cursor: {}", self.cursor_position);
+        
         if !self.status_message.is_empty() {
-            format!("{} | Cursor: {}", self.status_message, self.cursor_position)
-        } else {
-            format!("Cursor: {}", self.cursor_position)
+            s.push_str(" | ");
+            s.push_str(&self.status_message);
         }
+        
+        // Add game state information
+        if game_state.checkmate {
+            s.push_str(" | Checkmate! ");
+            s.push_str(match game_state.active_color {
+                PieceColor::White => "Black wins!",
+                PieceColor::Black => "White wins!",
+            });
+        } else if game_state.stalemate {
+            s.push_str(" | Stalemate! Game drawn.");
+        } else if game_state.check {
+            s.push_str(" | Check!");
+        }
+        
+        // Add current turn
+        s.push_str(" | ");
+        s.push_str(match game_state.active_color {
+            PieceColor::White => "White to move",
+            PieceColor::Black => "Black to move",
+        });
+        
+        s
     }
     
     fn handle_key_event(&mut self, key: KeyEvent, game_state: &mut GameState) -> TuiResult<()> {

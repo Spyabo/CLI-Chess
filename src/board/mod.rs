@@ -32,6 +32,7 @@ pub struct GameState {
     pub selected_square: Option<Position>,
     pub valid_moves: HashSet<Position>,
     pub position_history: HashMap<String, u8>,
+    pub current_pieces: HashMap<Color, HashSet<(PieceType, Position)>>,
 }
 
 impl Default for GameState {
@@ -48,8 +49,11 @@ impl Default for GameState {
             selected_square: None,
             valid_moves: HashSet::new(),
             position_history: HashMap::new(),
+            current_pieces: HashMap::new(),
         };
         
+        // Initialize current_pieces from the board
+        game_state.init_current_pieces();
         game_state.record_position();
         game_state
     }
@@ -69,7 +73,11 @@ impl GameState {
             checkmate: false,
             stalemate: false,
             position_history: HashMap::new(),
+            current_pieces: HashMap::new(),
         };
+        
+        // Initialize current_pieces   
+        game_state.init_current_pieces();
         
         // Record the initial position
         game_state.record_position();
@@ -92,7 +100,11 @@ impl GameState {
             checkmate: false,
             stalemate: false,
             position_history: HashMap::new(),
+            current_pieces: HashMap::new(),
         };
+        
+        // Initialize current_pieces from the FEN position
+        game_state.init_current_pieces();
         
         // Update the game state based on the FEN position
         game_state.update_state();
@@ -150,26 +162,83 @@ impl GameState {
     }
     
     /// Makes a move and updates the game state
+    /// Updates the current_pieces map when a piece is captured
+    fn remove_piece_from_tracking(&mut self, pos: Position, piece: &Piece) {
+        if let Some(pieces) = self.current_pieces.get_mut(&piece.color) {
+            pieces.retain(|(_, p)| *p != pos);
+        }
+    }
+    
+    /// Updates the current_pieces map when a piece is moved or promoted
+    fn update_piece_tracking(&mut self, old_pos: Position, new_pos: Position, new_piece: &Piece) {
+        // Remove from old position if it exists
+        if let Some(pieces) = self.current_pieces.get_mut(&new_piece.color) {
+            pieces.retain(|(_, p)| *p != old_pos);
+            pieces.insert((new_piece.piece_type, new_pos));
+        } else {
+            // Shouldn't happen if the board is in a valid state
+            let mut pieces = HashSet::new();
+            pieces.insert((new_piece.piece_type, new_pos));
+            self.current_pieces.insert(new_piece.color, pieces);
+        }
+    }
+    
+    /// Initializes the current_pieces map from the board state
+    fn init_current_pieces(&mut self) {
+        self.current_pieces.clear();
+        
+        for (&pos, piece) in &self.board.squares {
+            if piece.piece_type != PieceType::Empty {
+                self.current_pieces
+                    .entry(piece.color)
+                    .or_insert_with(HashSet::new)
+                    .insert((piece.piece_type, pos));
+            }
+        }
+    }
+    
     pub fn make_move(&mut self, from: Position, to: Position) -> Result<(), String> {
         // Save the current state for potential undo
         let original_state = self.board.clone();
         
-        // Check if this is a capture or pawn move (which reset the position history)
-        let is_reset_move = self.board.get_piece(to).is_some() || 
-                           matches!(self.board.get_piece(from), Some(p) if p.piece_type == PieceType::Pawn);
+        // Get the moving piece before the move
+        let moving_piece = match self.board.get_piece(from) {
+            Some(p) => p.clone(),
+            None => return Err("No piece at source position".to_string()),
+        };
+        
+        // Check if this is a capture
+        let captured_piece = self.board.get_piece(to).cloned();
+        
+        // Check if this is a pawn move (which resets the position history)
+        let is_pawn_move = moving_piece.piece_type == PieceType::Pawn;
+        let is_reset_move = captured_piece.is_some() || is_pawn_move;
+        
+        // Handle capture
+        if let Some(captured) = captured_piece {
+            self.remove_piece_from_tracking(to, &captured);
+        }
         
         // Try to make the move
         if let Err(e) = self.board.move_piece(from, to) {
             return Err(e);
         }
         
-        // Toggle the active color
+        // Get the piece type after the move (in case of promotion)
+        let moved_piece = self.board.get_piece(to).unwrap().clone();
+        
+        // Update piece tracking
+        self.update_piece_tracking(from, to, &moved_piece);
+        
+        // Toggle active color
         self.active_color = !self.active_color;
         
-        // Update the position history
+        // Reset position history on capture or pawn move (50-move rule)
         if is_reset_move {
             self.position_history.clear();
         }
+        
+        // Record the position after the move
         self.record_position();
         
         // Update the game state
@@ -180,6 +249,9 @@ impl GameState {
             // Revert the move
             self.board = original_state;
             self.active_color = !self.active_color; // Toggle back
+            
+            // Rebuild the pieces map since we reverted the board
+            self.init_current_pieces();
             return Err("Move would leave king in check".to_string());
         }
         
@@ -284,6 +356,7 @@ impl Board {
         
         fen_parts.join(" ")
     }
+
     pub fn load_fen(&mut self, fen: &str) -> Result<(), String> {
         let parts: Vec<&str> = fen.split_whitespace().collect();
         if parts.is_empty() {
@@ -366,73 +439,69 @@ impl Board {
     }
     
     pub fn is_square_under_attack(&self, pos: Position, by_color: Color) -> bool {
-        // Check for pawn attacks
-        let direction = if by_color == Color::White { 1 } else { -1 };
-        for dx in [-1, 1] {
-            if let Some(attack_pos) = Position::new(
-                (pos.file() as i8 + dx) as i8,
-                (pos.rank() as i8 - direction) as i8
-            ) {
-                if let Some(piece) = self.get_piece(attack_pos) {
-                    if piece.color == by_color && piece.piece_type == PieceType::Pawn {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Check for knight attacks
-        let knight_moves = [
+        // Scan outwards from the square in all directions
+        let knight_squares = [
             (1, 2), (2, 1), (2, -1), (1, -2),
-            (-1, -2), (-2, -1), (-2, 1), (-1, 2)
-        ];
-        for &(dx, dy) in &knight_moves {
-            if let Some(attack_pos) = Position::new(
-                (pos.file() as i8 + dx) as i8,
-                (pos.rank() as i8 + dy) as i8
-            ) {
-                if let Some(piece) = self.get_piece(attack_pos) {
-                    if piece.color == by_color && piece.piece_type == PieceType::Knight {
-                        return true;
-                    }
-                }
+            (-1, -2), (-2, -1), (-2, 1), (-1, 2),
+            ];
+            
+        for (dx, dy) in knight_squares {
+            let current: Position = pos + (dx, dy);
+            if current.is_valid() && self.get_piece(current).is_some_and(|p| p.color == by_color && p.piece_type == PieceType::Knight) {
+                return true;
             }
         }
 
-        // Check for sliding pieces (rook, bishop, queen, king)
+        // Check if an opposing pawn is attacking the position
+        let pawn_squares = match by_color {
+            Color::White => [(-1, -1), (-1, 1)], 
+            Color::Black => [(1, -1), (1, 1)],
+        };
+
+        for (dx, dy) in pawn_squares {
+            let current: Position = pos + (dx, dy);
+            if current.is_valid() && self.get_piece(current).is_some_and(|p| p.color == by_color && p.piece_type == PieceType::Pawn) {
+                return true;
+            }
+        }
+
         let directions = [
-            // Rook/Queen directions
             (1, 0), (-1, 0), (0, 1), (0, -1),
-            // Bishop/Queen directions
-            (1, 1), (1, -1), (-1, 1), (-1, -1)
+            (1, 1), (1, -1), (-1, 1), (-1, -1),
         ];
+        
+        for (dx, dy) in directions {
+            let mut current: Position = pos + (dx, dy);
+            let diagonal = dx != 0 && dy != 0;
+            
+            while current.is_valid() {
+                if let Some(piece) = self.get_piece(current) {
+                    if piece.piece_type == PieceType::Empty {
+                        current += (dx, dy);
+                        continue;
+                    }
 
-        for &(dx, dy) in &directions {
-            for step in 1..8 {
-                let x = (pos.file() as i8 + dx * step) as i8;
-                let y = (pos.rank() as i8 + dy * step) as i8;
-                
-                if let Some(attack_pos) = Position::new(x, y) {
-                    if let Some(piece) = self.get_piece(attack_pos) {
-                        if piece.color != by_color {
-                            break; // Blocked by opponent's piece
+                    if piece.color != by_color {
+                        break;
+                    }
+                    
+                    if diagonal {
+                        if piece.piece_type == PieceType::Bishop || piece.piece_type == PieceType::Queen {
+                            return true;
+                        } else {
+                            break;
                         }
-                        
-                        // Check if this is an attacking piece
-                        match piece.piece_type {
-                            PieceType::Queen => return true,
-                            PieceType::Rook if dx == 0 || dy == 0 => return true,
-                            PieceType::Bishop if dx != 0 && dy != 0 => return true,
-                            PieceType::King if step == 1 => return true,
-                            _ => break, // Not an attacking piece
+                    } else {
+                        if piece.piece_type == PieceType::Rook || piece.piece_type == PieceType::Queen {
+                            return true;
+                        } else {
+                            break;
                         }
                     }
-                } else {
-                    break; // Out of board
                 }
             }
         }
-
+        
         false
     }
     
