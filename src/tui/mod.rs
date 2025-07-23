@@ -14,7 +14,6 @@ use ratatui::{
 
 use crate::{
     board::{GameState, Position, Move},
-    pieces::Color as PieceColor,
 };
 
 // Declare the modules in this crate
@@ -104,23 +103,10 @@ impl Tui {
         self.status_timer = Some(Instant::now());
     }
 
-    pub(crate) fn should_quit(&self) -> bool {
-        self.should_quit
-    }
-
     pub(crate) fn set_should_quit(&mut self, quit: bool) {
         self.should_quit = quit;
     }
 }
-
-// Helper function for switching turn (can be standalone or on GameState)
-pub(crate) fn switch_turn<'a>(game_state: &'a mut GameState) {
-    game_state.active_color = match game_state.active_color {
-        PieceColor::White => PieceColor::Black,
-        PieceColor::Black => PieceColor::White,
-    };
-}
-
 
 impl Drop for Tui {
     fn drop(&mut self) {

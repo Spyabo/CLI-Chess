@@ -1,14 +1,10 @@
 // src/tui/selection.rs
 
-use anyhow::Result;
-
 use crate::{
     board::{GameState, Position, Move},
     moves::get_valid_moves,
-    tui::{Tui, switch_turn},
+    tui::Tui,
 };
-
-type TuiResult<T> = Result<T, anyhow::Error>;
 
 // Deselects any currently selected piece and clears possible moves.
 pub(crate) fn deselect_piece(tui: &mut Tui) {
@@ -57,7 +53,7 @@ pub(crate) fn try_select_piece(tui: &mut Tui, game_state: &GameState, pos: Posit
 // Assumes a piece is already selected (`tui.selected_piece` is Some).
 // Returns true if a move was successfully made, false otherwise.
 pub(crate) fn try_make_move(tui: &mut Tui, game_state: &mut GameState) -> bool {
-    let Some(from_pos) = tui.selected_piece else {
+    let Some(_from_pos) = tui.selected_piece else {
         return false; // No piece selected
     };
     
@@ -95,45 +91,3 @@ pub(crate) fn try_make_move(tui: &mut Tui, game_state: &mut GameState) -> bool {
     }
 }
 
-
-// Handles a click on a square, either selecting a piece or attempting a move.
-pub(crate) fn handle_square_click(tui: &mut Tui, game_state: &mut GameState, clicked_pos: Position) -> TuiResult<()> {
-     // Update cursor position to match click for visual consistency
-     tui.cursor_position = clicked_pos;
-
-    if let Some(_selected_pos) = tui.selected_piece {
-        // A piece is already selected. Is the click on a possible move destination?
-        if tui.possible_moves.iter().any(|m| m.to == clicked_pos) {
-            // Yes, attempt to make the move
-            // Find the move from the possible_moves list (needed for promotion handling later)
-            if let Some(mv) = tui.possible_moves.iter().find(|m| m.to == clicked_pos) {
-                 // Use make_move on the actual game state
-                 match game_state.make_move(mv.from, mv.to) {
-                     Ok(()) => {
-                         tui.set_status(format!("Moved to {}", mv.to));
-                         switch_turn(game_state); // Switch turn after successful move
-                         deselect_piece(tui); // Deselect after successful move
-                     }
-                     Err(e) => {
-                         tui.set_status(format!("Move failed: {}", e)); // Should not happen if possible moves are legal
-                         // Keep piece selected? Or deselect? Deselect might be safer.
-                         deselect_piece(tui);
-                     }
-                 }
-            } else {
-                 // This case should theoretically not be reached if possible_moves is correct
-                 tui.set_status("Clicked on a square not in possible moves?".to_string());
-                 deselect_piece(tui);
-            }
-
-        } else {
-            // Clicked somewhere else while a piece was selected.
-            // Try to select a *new* piece at the clicked position.
-            try_select_piece(tui, game_state, clicked_pos);
-        }
-    } else {
-        // No piece is selected. Try to select the piece at the clicked position.
-        try_select_piece(tui, game_state, clicked_pos);
-    }
-    Ok(())
-}
