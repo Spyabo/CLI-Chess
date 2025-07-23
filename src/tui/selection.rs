@@ -90,4 +90,3 @@ pub(crate) fn try_make_move(tui: &mut Tui, game_state: &mut GameState) -> bool {
         }
     }
 }
-
