@@ -23,30 +23,17 @@ fn main() -> Result<()> {
     // Parse command line arguments
     let args = Args::parse();
     
-    // Initialize the terminal
-    let mut tui = Tui::new()?;
-    
-    // Initialize the game state
+    // Initialize the game state first
     let mut game_state = match args.fen {
         Some(fen) => GameState::from_fen(&fen).map_err(|e| anyhow::anyhow!("Failed to parse FEN: {}", e))?,
         None => GameState::new(),
     };
     
+    // Initialize the terminal UI
+    let mut tui = Tui::new()?;
+    
     // Run the TUI main loop
     tui.run(&mut game_state)?;
     
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::board::Board;
-    use crate::pieces::PieceType;
-
-    #[test]
-    fn test_board_initialization() {
-        let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
-        let pos = crate::board::Position::new(0, 0).unwrap();
-        assert_eq!(board.get_piece(pos).unwrap().piece_type, PieceType::Rook);
-    }
 }

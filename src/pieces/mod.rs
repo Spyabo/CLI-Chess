@@ -92,10 +92,6 @@ impl Piece {
 
     /// Convert the piece to its FEN character representation
     pub fn to_char(&self) -> char {
-        if self.piece_type == PieceType::Empty {
-            return ' ';
-        }
-        
         let c = match self.piece_type {
             PieceType::Pawn => 'p',
             PieceType::Rook => 'r',
@@ -103,7 +99,7 @@ impl Piece {
             PieceType::Bishop => 'b',
             PieceType::Queen => 'q',
             PieceType::King => 'k',
-            PieceType::Empty => ' ', // This case is already handled above
+            PieceType::Empty => ' ',
         };
         
         match self.color {
@@ -113,23 +109,19 @@ impl Piece {
     }
     
     pub fn to_unicode(&self) -> &'static str {
-        if self.piece_type == PieceType::Empty {
-            return " ";
-        }
-        
         match (self.piece_type, self.color) {
-            (PieceType::Pawn, Color::White) => "♙",
-            (PieceType::Rook, Color::White) => "♖",
-            (PieceType::Knight, Color::White) => "♘",
-            (PieceType::Bishop, Color::White) => "♗",
-            (PieceType::Queen, Color::White) => "♕",
-            (PieceType::King, Color::White) => "♔",
-            (PieceType::Pawn, Color::Black) => "♟",
-            (PieceType::Rook, Color::Black) => "♜",
-            (PieceType::Knight, Color::Black) => "♞",
-            (PieceType::Bishop, Color::Black) => "♝",
-            (PieceType::Queen, Color::Black) => "♛",
-            (PieceType::King, Color::Black) => "♚",
+            (PieceType::Pawn, Color::White) => "♟",
+            (PieceType::Rook, Color::White) => "♜",
+            (PieceType::Knight, Color::White) => "♞",
+            (PieceType::Bishop, Color::White) => "♝",
+            (PieceType::Queen, Color::White) => "♛",
+            (PieceType::King, Color::White) => "♚",
+            (PieceType::Pawn, Color::Black) => "♙",
+            (PieceType::Rook, Color::Black) => "♖",
+            (PieceType::Knight, Color::Black) => "♘",
+            (PieceType::Bishop, Color::Black) => "♗",
+            (PieceType::Queen, Color::Black) => "♕",
+            (PieceType::King, Color::Black) => "♔",
             _ => "·",
         }
     }
@@ -170,9 +162,9 @@ mod tests {
     #[test]
     fn test_unicode_display() {
         let white_rook = Piece::new(PieceType::Rook, Color::White);
-        assert_eq!(white_rook.to_unicode(), "♖");
+        assert_eq!(white_rook.to_unicode(), "♜");
 
         let black_knight = Piece::new(PieceType::Knight, Color::Black);
-        assert_eq!(black_knight.to_unicode(), "♞");
+        assert_eq!(black_knight.to_unicode(), "♘");
     }
 }

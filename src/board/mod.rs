@@ -100,7 +100,7 @@ impl GameState {
     }
     
     /// Updates the game state (check, checkmate, stalemate, threefold repetition)
-    fn update_state(&mut self) {
+    pub fn update_state(&mut self) {
         // Update check status
         self.check = self.board.is_in_check(self.active_color);
         

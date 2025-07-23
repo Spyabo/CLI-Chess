@@ -184,6 +184,31 @@ fn test_castling_rights_after_king_move() {
 }
 
 #[test]
+fn test_turn_switching() {
+    // Create a new game state
+    let mut game_state = GameState::new();
+    
+    // Initially it should be White's turn
+    assert_eq!(game_state.active_color, Color::White);
+    
+    // Make a move with White (e2 to e4)
+    let from = Position::from_notation("e2").unwrap();
+    let to = Position::from_notation("e4").unwrap();
+    game_state.make_move(from, to).unwrap();
+    
+    // After White's move, it should be Black's turn
+    assert_eq!(game_state.active_color, Color::Black);
+    
+    // Make a move with Black (e7 to e5)
+    let from = Position::from_notation("e7").unwrap();
+    let to = Position::from_notation("e5").unwrap();
+    game_state.make_move(from, to).unwrap();
+    
+    // After Black's move, it should be White's turn again
+    assert_eq!(game_state.active_color, Color::White);
+}
+
+#[test]
 fn test_pin_detection() {
     // Position where a piece is pinned to the king
     let board = Board::from_fen("r1bqkbnr/ppp1pppp/2n5/1B1p4/3P4/4P3/PPP2PPP/RNBQK1NR b KQkq - 0 1").unwrap();
