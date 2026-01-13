@@ -465,43 +465,51 @@ impl Board {
             }
         }
 
+        // Check for attacking king (adjacent squares)
+        let king_squares = [
+            (1, 0), (-1, 0), (0, 1), (0, -1),
+            (1, 1), (1, -1), (-1, 1), (-1, -1),
+        ];
+        for (dx, dy) in king_squares {
+            let current: Position = pos + (dx, dy);
+            if current.is_valid() && self.get_piece(current).is_some_and(|p| p.color == by_color && p.piece_type == PieceType::King) {
+                return true;
+            }
+        }
+
+        // Check for sliding piece attacks (rooks, bishops, queens)
         let directions = [
             (1, 0), (-1, 0), (0, 1), (0, -1),
             (1, 1), (1, -1), (-1, 1), (-1, -1),
         ];
-        
+
         for (dx, dy) in directions {
             let mut current: Position = pos + (dx, dy);
             let diagonal = dx != 0 && dy != 0;
-            
+
             while current.is_valid() {
                 if let Some(piece) = self.get_piece(current) {
-                    if piece.piece_type == PieceType::Empty {
-                        current += (dx, dy);
-                        continue;
+                    if piece.color != by_color {
+                        break; // Blocked by piece of opposite color
                     }
 
-                    if piece.color != by_color {
-                        break;
-                    }
-                    
+                    // Check if this piece type can attack along this direction
                     if diagonal {
                         if piece.piece_type == PieceType::Bishop || piece.piece_type == PieceType::Queen {
                             return true;
-                        } else {
-                            break;
                         }
                     } else {
                         if piece.piece_type == PieceType::Rook || piece.piece_type == PieceType::Queen {
                             return true;
-                        } else {
-                            break;
                         }
                     }
+                    break; // Blocked by piece that can't attack this way
                 }
+                // Empty square - continue scanning in this direction
+                current = current + (dx, dy);
             }
         }
-        
+
         false
     }
     
