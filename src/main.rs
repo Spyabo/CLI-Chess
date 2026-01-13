@@ -1,6 +1,7 @@
 mod board;
 mod moves;
 mod pieces;
+mod pixel_art;
 mod tui;
 
 use anyhow::Result;

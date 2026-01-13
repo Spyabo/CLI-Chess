@@ -9,14 +9,15 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    style::{Modifier, Style},
+    widgets::Paragraph,
     Terminal,
 };
 
 use crate::{
     board::{GameState, Position, Move},
-    pieces::{Color as PieceColor, PieceType},
+    pieces::Color as PieceColor,
+    pixel_art::{calculate_board_layout, PixelArtBoard, PieceSprites},
 };
 
 type TuiResult<T> = Result<T, anyhow::Error>;
@@ -30,6 +31,7 @@ pub struct Tui {
     selected_piece: Option<Position>,
     possible_moves: Vec<Move>,
     should_quit: bool,
+    sprites: PieceSprites,
 }
 
 impl Tui {
@@ -46,6 +48,7 @@ impl Tui {
             selected_piece: None,
             possible_moves: Vec::new(),
             should_quit: false,
+            sprites: PieceSprites::default(),
         })
     }
 
@@ -83,37 +86,53 @@ impl Tui {
                 self.status_timer = None;
             }
         }
-        
+
         // Extract the data we need before borrowing terminal mutably
         let cursor_position = self.cursor_position;
         let selected_piece = self.selected_piece;
         let possible_moves = self.possible_moves.clone();
         let status_text = self.get_status_text(game_state);
-        
+        let sprites = &self.sprites;
+
         self.terminal.draw(|f| {
-            // Create widgets inside the draw closure using extracted data
-            let board = Self::create_board_widget_static(
-                game_state, 
-                cursor_position, 
-                selected_piece, 
-                &possible_moves
-            );
-            let title = Paragraph::new("CLI Chess (Q to quit, R to reset, M to toggle mouse)")
-                .style(Style::default().add_modifier(Modifier::BOLD))
-                .alignment(ratatui::layout::Alignment::Center);
-            let status_bar = Paragraph::new(status_text.clone())
-                .style(Style::default())
-                .alignment(ratatui::layout::Alignment::Left);
-            
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(1)
                 .constraints([
-                    Constraint::Length(3),
-                    Constraint::Percentage(80),
-                    Constraint::Length(3),
+                    Constraint::Length(2),      // Title
+                    Constraint::Percentage(85), // Board
+                    Constraint::Length(2),      // Status bar
                 ])
                 .split(f.size());
+
+            // Calculate board layout to determine if we're in sprite mode
+            let board_area_width = chunks[1].width.saturating_sub(3) as usize;
+            let board_area_height = chunks[1].height.saturating_sub(2) as usize;
+            let layout = calculate_board_layout(board_area_width, board_area_height);
+
+            // Create title with fullscreen hint if needed
+            let title_text = if !layout.use_sprites && !layout.too_small {
+                "CLI Chess (Q to quit, R to reset, M for mouse) | Fullscreen for better graphics"
+            } else {
+                "CLI Chess (Q to quit, R to reset, M to toggle mouse)"
+            };
+
+            let title = Paragraph::new(title_text)
+                .style(Style::default().add_modifier(Modifier::BOLD))
+                .alignment(ratatui::layout::Alignment::Center);
+
+            // Create board widget
+            let board = PixelArtBoard::new(
+                game_state,
+                cursor_position,
+                selected_piece,
+                &possible_moves,
+                sprites,
+            );
+
+            let status_bar = Paragraph::new(status_text.clone())
+                .style(Style::default())
+                .alignment(ratatui::layout::Alignment::Left);
 
             // Render all widgets
             f.render_widget(title, chunks[0]);
@@ -132,127 +151,6 @@ impl Tui {
             }
         }
         Ok(())
-    }
-
-    fn create_board_widget_static<'a>(
-        game_state: &'a GameState,
-        cursor_position: Position,
-        selected_piece: Option<Position>,
-        possible_moves: &'a [Move],
-    ) -> Table<'a> {
-        let mut rows = Vec::with_capacity(9);
-        
-        // Add column labels (a-h)
-        let mut header = vec![Cell::from(" ")];
-        for c in b'a'..=b'h' {
-            header.push(Cell::from((c as char).to_string()));
-        }
-        rows.push(Row::new(header).style(Style::default().add_modifier(Modifier::BOLD)));
-        
-        for row in (0..8).rev() {
-            let mut cells = Vec::with_capacity(9);
-            // Add row number (1-8)
-            cells.push(Cell::from((row + 1).to_string())
-                .style(Style::default().add_modifier(Modifier::BOLD)));
-            
-            for col in 0..8 {
-                let pos = Position::from_xy(col, row).unwrap();
-                let cell = Self::create_board_cell_static(
-                    pos, 
-                    game_state, 
-                    cursor_position, 
-                    selected_piece, 
-                    possible_moves
-                );
-                cells.push(cell);
-            }
-            rows.push(Row::new(cells).height(1));
-        }
-        
-        // Add file labels (a-h at the bottom)
-        let file_labels = Row::new(
-            [" ", "a", "b", "c", "d", "e", "f", "g", "h"]
-                .iter()
-                .map(|&s| Cell::from(s).style(Style::default().add_modifier(Modifier::BOLD)))
-        );
-        rows.push(file_labels);
-
-        Table::new(rows)
-            .block(Block::default().borders(Borders::ALL).title("Chess"))
-            .widths(&[Constraint::Length(2); 9])
-            .column_spacing(0)
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-    }
-
-    fn create_board_cell_static<'a>(
-        pos: Position,
-        game_state: &'a GameState,
-        cursor_position: Position,
-        selected_piece: Option<Position>,
-        possible_moves: &'a [Move],
-    ) -> Cell<'a> {
-        let is_light_square = (pos.x + pos.y) % 2 == 1;
-        let mut cell_style = if is_light_square {
-            Style::default().bg(Color::Rgb(245, 222, 179)) // Light squares
-        } else {
-            Style::default().bg(Color::Rgb(139, 69, 19))   // Dark squares
-        };
-
-        // Highlight cursor position
-        if pos == cursor_position {
-            cell_style = Style::default()
-                .bg(Color::Rgb(80, 80, 200))
-                .add_modifier(Modifier::BOLD);
-        }
-
-        // Get piece symbol and apply styling
-        if let Some(piece) = game_state.board.get_piece(pos) {
-            let symbol = Self::get_piece_symbol(piece.piece_type, piece.color);
-            let mut piece_style = cell_style
-                .fg(if piece.color == PieceColor::White { Color::White } else { Color::Black });
-            
-            // Highlight king in check
-            if piece.piece_type == PieceType::King 
-                && game_state.check 
-                && piece.color == game_state.active_color {
-                piece_style = Style::default()
-                    .bg(Color::Rgb(200, 50, 50))
-                    .fg(if piece.color == PieceColor::White { Color::White } else { Color::Black })
-                    .add_modifier(Modifier::BOLD);
-            }
-            
-            // Highlight selected piece and possible moves
-            if let Some(selected_pos) = selected_piece {
-                if selected_pos == pos {
-                    piece_style = piece_style.bg(Color::Rgb(70, 130, 180));
-                } else if possible_moves.iter().any(|m| m.to == pos) {
-                    piece_style = piece_style.bg(Color::Rgb(0, 100, 0));
-                }
-            }
-            
-            Cell::from(symbol).style(piece_style)
-        } else {
-            // Empty square
-            let mut empty_style = cell_style;
-            if selected_piece.is_some() {
-                if possible_moves.iter().any(|m| m.to == pos) {
-                    empty_style = Style::default().bg(Color::Rgb(0, 100, 0));
-                }
-            }
-            Cell::from("  ").style(empty_style)
-        }
-    }
-
-    fn get_piece_symbol(piece_type: PieceType, color: PieceColor) -> &'static str {
-        match piece_type {
-            PieceType::Pawn => if color == PieceColor::White { "♙" } else { "♟" },
-            PieceType::Knight => if color == PieceColor::White { "♘" } else { "♞" },
-            PieceType::Bishop => if color == PieceColor::White { "♗" } else { "♝" },
-            PieceType::Rook => if color == PieceColor::White { "♖" } else { "♜" },
-            PieceType::Queen => if color == PieceColor::White { "♕" } else { "♛" },
-            PieceType::King => if color == PieceColor::White { "♔" } else { "♚" },
-            PieceType::Empty => " ",
-        }
     }
 
     fn get_status_text(&self, game_state: &GameState) -> String {
@@ -404,19 +302,53 @@ impl Tui {
 
     fn calculate_board_position(&self, mouse: MouseEvent) -> Option<Position> {
         let term_size = self.terminal.size().ok()?;
-        let board_width = 8 * 4;
-        let board_height = 8 * 2;
-        
-        let board_x = (term_size.width.saturating_sub(board_width as u16)) / 2;
-        let board_y = (term_size.height.saturating_sub(board_height as u16)) / 2;
-        
-        let clicked_col = (mouse.column.saturating_sub(board_x)) / 4;
-        let clicked_row = 7 - (mouse.row.saturating_sub(board_y)) / 2;
-        
+
+        // Calculate the board area (matching the draw layout)
+        // Layout: margin(1), title(2), board(85%), status(2)
+        let margin = 1u16;
+        let title_height = 2u16;
+        let status_height = 2u16;
+
+        // Calculate board area dimensions
+        let total_height = term_size.height.saturating_sub(margin * 2);
+        let board_area_height = (total_height.saturating_sub(title_height + status_height) * 85) / 100;
+        let board_area_width = term_size.width.saturating_sub(margin * 2);
+
+        // Calculate available space (matching board_widget.rs)
+        let available_width = board_area_width.saturating_sub(3) as usize;
+        let available_height = board_area_height.saturating_sub(2) as usize;
+
+        // Use the same layout calculation as the board widget
+        let layout = calculate_board_layout(available_width, available_height);
+
+        if layout.too_small {
+            return None;
+        }
+
+        let square_width = layout.square_width;
+        let square_height = layout.square_height;
+
+        // Calculate board position (centred horizontally)
+        let board_pixel_width = (square_width * 8) as u16;
+        let board_x_offset = margin + 2 + ((available_width as u16).saturating_sub(board_pixel_width)) / 2;
+        let board_y_offset = margin + title_height + 1;
+
+        // Check if click is within board bounds
+        if mouse.column < board_x_offset || mouse.row < board_y_offset {
+            return None;
+        }
+
+        // Calculate which square was clicked
+        let rel_x = mouse.column.saturating_sub(board_x_offset) as usize;
+        let rel_y = mouse.row.saturating_sub(board_y_offset) as usize;
+
+        let clicked_col = rel_x / square_width;
+        let clicked_row = 7usize.saturating_sub(rel_y / square_height);
+
         if clicked_col >= 8 || clicked_row >= 8 {
             return None;
         }
-        
+
         Position::new(clicked_col as i8, clicked_row as i8)
     }
 
