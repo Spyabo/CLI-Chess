@@ -122,14 +122,16 @@ pub struct GameState {
     pub captured_by_white: Vec<Piece>,  // Black pieces captured by white
     pub captured_by_black: Vec<Piece>,  // White pieces captured by black
     pub move_history: Vec<MoveRecord>,  // All moves played in this game
+    pub board_history: Vec<Board>,      // Board snapshots for rewinding (index 0 = initial, index N = after move N)
 }
 
 impl Default for GameState {
     fn default() -> Self {
         let mut board = Board::default();
         board.load_fen(STARTING_FEN).expect("Failed to load starting position");
-        
+
         let mut game_state = GameState {
+            board_history: vec![board.clone()],  // Store initial position
             board,
             active_color: Color::White,
             check: false,
@@ -155,6 +157,7 @@ impl GameState {
         board.load_fen(STARTING_FEN).unwrap();
 
         let mut game_state = Self {
+            board_history: vec![board.clone()],  // Store initial position
             board,
             active_color: Color::White,
             check: false,
@@ -166,13 +169,13 @@ impl GameState {
             captured_by_black: Vec::new(),
             move_history: Vec::new(),
         };
-        
-        // Initialize current_pieces   
+
+        // Initialize current_pieces
         game_state.init_current_pieces();
-        
+
         // Record the initial position
         game_state.record_position();
-        
+
         // Update the game state based on the initial position
         game_state.update_state();
         game_state
@@ -181,8 +184,9 @@ impl GameState {
     pub fn from_fen(fen: &str) -> Result<Self, String> {
         let board = Board::from_fen(fen)?;
         let active_color = board.active_color;
-        
+
         let mut game_state = Self {
+            board_history: vec![board.clone()],  // Store initial position
             board,
             active_color,
             check: false,
@@ -197,7 +201,7 @@ impl GameState {
 
         // Initialize current_pieces from the FEN position
         game_state.init_current_pieces();
-        
+
         // Update the game state based on the FEN position
         game_state.update_state();
         Ok(game_state)
@@ -385,6 +389,9 @@ impl GameState {
             promotion,
         };
         self.move_history.push(move_record);
+
+        // Save board snapshot for rewinding (board_history[N] = state after move N-1)
+        self.board_history.push(self.board.clone());
 
         Ok(())
     }

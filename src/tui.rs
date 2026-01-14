@@ -22,6 +22,12 @@ use crate::{
 
 type TuiResult<T> = Result<T, anyhow::Error>;
 
+/// Result of clicking on the move panel
+enum PanelClickResult {
+    SpecificMove(usize),  // Clicked on a specific move (index into move_history)
+    PanelArea,            // Clicked on panel but not on a specific move
+}
+
 pub struct Tui {
     terminal: Terminal<CrosstermBackend<std::io::Stderr>>,
     status_message: String,
@@ -34,13 +40,18 @@ pub struct Tui {
     capture_animation: Option<(Position, Instant)>,  // Position and start time of capture flash
     show_history_panel: bool,    // Toggle with 'H'
     use_unicode_notation: bool,  // Toggle with 'N'
+    // History panel navigation state
+    history_focused: bool,              // true = arrow keys control history, not board
+    history_scroll_offset: usize,       // First visible move pair index
+    selected_move_index: Option<usize>, // Which move is highlighted (0-based into move_history)
+    viewing_history: bool,              // true = showing historical board state
 }
 
 impl Tui {
     pub fn new() -> Result<Self> {
         let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
         terminal.hide_cursor()?;
-        
+
         Ok(Self {
             terminal,
             status_message: String::new(),
@@ -51,8 +62,12 @@ impl Tui {
             should_quit: false,
             sprites: PieceSprites::default(),
             capture_animation: None,
-            show_history_panel: true,   // Show by default
+            show_history_panel: true,    // Show by default
             use_unicode_notation: false, // Use letters by default
+            history_focused: false,
+            history_scroll_offset: 0,
+            selected_move_index: None,
+            viewing_history: false,
         })
     }
 
@@ -108,10 +123,30 @@ impl Tui {
         let show_history = self.show_history_panel;
         let use_unicode = self.use_unicode_notation;
 
+        // History navigation state
+        let history_focused = self.history_focused;
+        let history_scroll_offset = self.history_scroll_offset;
+        let selected_move_index = self.selected_move_index;
+        let viewing_history = self.viewing_history;
+
         // Get captured pieces for the capture bars
         let captured_by_white = game_state.captured_by_white.clone();
         let captured_by_black = game_state.captured_by_black.clone();
         let move_history = game_state.move_history.clone();
+
+        // Get the board to display (current or historical)
+        let display_board = if viewing_history {
+            if let Some(move_idx) = selected_move_index {
+                // board_history[0] = initial, board_history[N] = after move N-1
+                // So to see state AFTER move_idx, use board_history[move_idx + 1]
+                let board_index = (move_idx + 1).min(game_state.board_history.len().saturating_sub(1));
+                game_state.board_history.get(board_index).cloned()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         self.terminal.draw(|f| {
             // Main vertical layout (always uses full screen width - no horizontal split)
@@ -135,9 +170,9 @@ impl Tui {
 
             // Create title with hints
             let title_text = if !layout.use_sprites && !layout.too_small {
-                "CLI Chess (Q quit, R reset, H history, N notation) | Fullscreen recommended"
+                "CLI Chess (Q quit, R reset, H moves, N notation) | Fullscreen recommended"
             } else {
-                "CLI Chess (Q quit, R reset, H history, N notation)"
+                "CLI Chess (Q quit, R reset, H moves, N notation)"
             };
 
             let title = Paragraph::new(title_text)
@@ -163,14 +198,36 @@ impl Tui {
                 white_material.saturating_sub(black_material).max(0),
             );
 
-            // Create board widget
+            // Create board widget - use historical board if viewing history
+            let temp_game_state;
+            let board_game_state = if let Some(ref hist_board) = display_board {
+                // Create a temporary game state with the historical board
+                temp_game_state = GameState {
+                    board: hist_board.clone(),
+                    check: false,  // Don't show check indicator when viewing history
+                    checkmate: false,
+                    stalemate: false,
+                    ..game_state.clone()
+                };
+                &temp_game_state
+            } else {
+                game_state
+            };
+
+            // When viewing history, don't show selection or possible moves
+            let (shown_selected, shown_moves): (Option<Position>, Vec<Move>) = if viewing_history {
+                (None, Vec::new())
+            } else {
+                (selected_piece, possible_moves.clone())
+            };
+
             let board = PixelArtBoard::new(
-                game_state,
+                board_game_state,
                 cursor_position,
-                selected_piece,
-                &possible_moves,
+                shown_selected,
+                &shown_moves,
                 sprites,
-                capture_animation,
+                if viewing_history { None } else { capture_animation },
             );
 
             let status_bar = Paragraph::new(status_text.clone())
@@ -209,7 +266,11 @@ impl Tui {
                         height: board_pixel_height,  // Match actual board height
                     };
 
-                    let history_panel = MoveHistoryPanel::new(&move_history, use_unicode);
+                    let history_panel = MoveHistoryPanel::new(&move_history, use_unicode)
+                        .scroll_offset(history_scroll_offset)
+                        .selected_move(selected_move_index)
+                        .focused(history_focused)
+                        .viewing_history(viewing_history);
                     f.render_widget(history_panel, history_area);
                 }
             }
@@ -278,9 +339,47 @@ impl Tui {
     }
     
     fn handle_key_event(&mut self, key: KeyEvent, game_state: &mut GameState) -> TuiResult<()> {
+        // Handle history-focused mode separately
+        if self.history_focused {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('h') => {
+                    self.exit_history_focus();
+                }
+                KeyCode::Char('q') => {
+                    self.should_quit = true;
+                }
+                // Arrow navigation in history mode
+                // Up/Down: move by 2 (same color's previous/next move)
+                // Left/Right: move by 1 (previous/next move)
+                KeyCode::Up => self.navigate_history(-2, game_state),
+                KeyCode::Down => self.navigate_history(2, game_state),
+                KeyCode::Left => self.navigate_history(-1, game_state),
+                KeyCode::Right => self.navigate_history(1, game_state),
+                KeyCode::Home => self.jump_to_start(game_state),
+                KeyCode::End => self.jump_to_end(game_state),
+                KeyCode::Char('n') => {
+                    self.use_unicode_notation = !self.use_unicode_notation;
+                    self.set_status(format!(
+                        "Notation: {}",
+                        if self.use_unicode_notation { "Unicode pieces" } else { "Letters" }
+                    ));
+                }
+                KeyCode::Char('r') => {
+                    self.exit_history_focus();
+                    self.reset_game(game_state);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // Normal (board-focused) mode
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                if self.selected_piece.is_some() {
+                if self.viewing_history {
+                    // Exit viewing history first
+                    self.exit_history_focus();
+                } else if self.selected_piece.is_some() {
                     self.deselect_piece();
                 } else {
                     self.should_quit = true;
@@ -290,11 +389,12 @@ impl Tui {
                 self.reset_game(game_state);
             }
             KeyCode::Char('h') => {
-                self.show_history_panel = !self.show_history_panel;
-                self.set_status(format!(
-                    "Move history {}",
-                    if self.show_history_panel { "shown" } else { "hidden" }
-                ));
+                // Toggle history focus (entering history navigation mode)
+                if self.history_focused {
+                    self.exit_history_focus();
+                } else {
+                    self.enter_history_focus(game_state);
+                }
             }
             KeyCode::Char('n') => {
                 self.use_unicode_notation = !self.use_unicode_notation;
@@ -326,6 +426,11 @@ impl Tui {
         self.selected_piece = None;
         self.possible_moves.clear();
         self.capture_animation = None;
+        // Reset history navigation state
+        self.history_focused = false;
+        self.history_scroll_offset = 0;
+        self.selected_move_index = None;
+        self.viewing_history = false;
         self.set_status("Game reset".to_string());
     }
 
@@ -339,6 +444,13 @@ impl Tui {
     }
 
     fn handle_enter_key(&mut self, game_state: &mut GameState) -> TuiResult<()> {
+        // If viewing history, exit history mode first (don't make moves)
+        if self.viewing_history {
+            self.exit_history_focus();
+            self.set_status("Returned to current position".to_string());
+            return Ok(());
+        }
+
         if let Some(_selected_pos) = self.selected_piece {
             // Try to make a move
             if let Some(mv) = self.possible_moves.iter()
@@ -368,6 +480,11 @@ impl Tui {
     }
 
     fn try_select_piece_at_cursor(&mut self, game_state: &GameState) {
+        // Don't allow selection when viewing history
+        if self.viewing_history {
+            return;
+        }
+
         if let Some(piece) = game_state.board.get_piece(self.cursor_position) {
             if piece.color == game_state.active_color {
                 self.selected_piece = Some(self.cursor_position);
@@ -385,11 +502,74 @@ impl Tui {
     }
 
     fn handle_mouse_event(&mut self, mouse: MouseEvent, game_state: &mut GameState) -> TuiResult<()> {
+        // Handle mouse scroll for move panel
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if self.show_history_panel {
+                    self.history_scroll_offset = self.history_scroll_offset.saturating_sub(1);
+                }
+                return Ok(());
+            }
+            MouseEventKind::ScrollDown => {
+                if self.show_history_panel {
+                    let total_pairs = (game_state.move_history.len() + 1) / 2;
+                    // Allow scrolling up to total_pairs (will be clamped in widget)
+                    self.history_scroll_offset = (self.history_scroll_offset + 1).min(total_pairs);
+                }
+                return Ok(());
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Continue to handle click below
+            }
+            _ => return Ok(()),
+        }
+
+        // Check if click is on the move panel
+        if self.show_history_panel {
+            if let Some(click_result) = self.calculate_panel_click(mouse, game_state) {
+                let total_moves = game_state.move_history.len();
+
+                // Determine which move to select
+                let move_index = match click_result {
+                    PanelClickResult::SpecificMove(idx) => idx,
+                    PanelClickResult::PanelArea => {
+                        // Clicked on panel but not a specific move - select most recent
+                        if total_moves > 0 {
+                            total_moves - 1
+                        } else {
+                            // No moves yet, just focus the panel
+                            self.history_focused = true;
+                            self.set_status("Move panel focused - make moves to navigate".to_string());
+                            return Ok(());
+                        }
+                    }
+                };
+
+                // Click on move panel - select that move
+                self.history_focused = true;
+                self.selected_move_index = Some(move_index);
+                self.viewing_history = move_index < total_moves.saturating_sub(1);
+                self.ensure_move_visible(move_index, game_state);
+
+                let move_num = (move_index / 2) + 1;
+                let is_white = move_index % 2 == 0;
+                self.set_status(format!(
+                    "Selected move {}{} - use arrows to navigate",
+                    move_num,
+                    if is_white { "." } else { "..." }
+                ));
+                return Ok(());
+            }
+        }
+
+        // Don't allow board clicks when game is over
         if game_state.checkmate || game_state.stalemate {
             return Ok(());
         }
 
-        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+        // If viewing history, exit on board click
+        if self.viewing_history {
+            self.exit_history_focus();
             return Ok(());
         }
 
@@ -399,6 +579,95 @@ impl Tui {
 
         self.status_timer = Some(Instant::now());
         Ok(())
+    }
+
+    fn calculate_panel_click(&self, mouse: MouseEvent, game_state: &GameState) -> Option<PanelClickResult> {
+        let term_size = self.terminal.size().ok()?;
+
+        // Calculate layout to find panel position (matching draw logic)
+        let margin = 1u16;
+        let title_height = 2u16;
+        let captures_bar_height = 1u16;
+        let status_height = 2u16;
+
+        let total_height = term_size.height.saturating_sub(margin * 2);
+        let board_area_y = margin + title_height + captures_bar_height;
+        let board_area_height = total_height.saturating_sub(title_height + captures_bar_height * 2 + status_height);
+        let board_area_width = term_size.width.saturating_sub(margin * 2);
+
+        let available_width = board_area_width.saturating_sub(3) as usize;
+        let available_height = board_area_height.saturating_sub(2) as usize;
+
+        let layout = calculate_board_layout(available_width, available_height);
+        if layout.too_small {
+            return None;
+        }
+
+        let board_pixel_width = (layout.square_width * 8) as u16;
+        let board_pixel_height = (layout.square_height * 8) as u16;
+
+        // Calculate panel bounds
+        let board_x_start = margin + 2 + ((available_width as u16).saturating_sub(board_pixel_width)) / 2;
+        let board_x_end = board_x_start + board_pixel_width;
+        let board_y_start = board_area_y + 1;
+
+        let panel_width = 20u16;
+        let panel_x = board_x_end + 1;
+
+        // Check if click is within panel bounds (including border)
+        if mouse.column < panel_x || mouse.column >= panel_x + panel_width {
+            return None;
+        }
+        if mouse.row < board_y_start || mouse.row >= board_y_start + board_pixel_height {
+            return None;
+        }
+
+        // Panel inner area (accounting for border)
+        let panel_inner_y_start = board_y_start + 1;
+        let panel_inner_y_end = board_y_start + board_pixel_height - 1;
+
+        // If click is on the border or outside inner content area, return PanelArea
+        if mouse.row < panel_inner_y_start || mouse.row >= panel_inner_y_end {
+            return Some(PanelClickResult::PanelArea);
+        }
+
+        // Calculate which row was clicked
+        let clicked_row = (mouse.row - panel_inner_y_start) as usize;
+
+        // Calculate which move pair this row represents
+        let pair_index = self.history_scroll_offset + clicked_row;
+        let total_moves = game_state.move_history.len();
+        let total_pairs = (total_moves + 1) / 2;
+
+        // If clicked beyond the moves list, return PanelArea
+        if pair_index >= total_pairs {
+            return Some(PanelClickResult::PanelArea);
+        }
+
+        // Determine if click was on white's move or black's move based on x position
+        // White's move: columns 4-9 (relative to panel inner x)
+        // Black's move: columns 10+ (relative to panel inner x)
+        let rel_x = mouse.column.saturating_sub(panel_x + 1); // +1 for border
+
+        let move_index = if rel_x >= 10 {
+            // Click on black's move column
+            let black_move_index = pair_index * 2 + 1;
+            if black_move_index < total_moves {
+                black_move_index
+            } else {
+                // Black hasn't moved yet, select white's move instead
+                pair_index * 2
+            }
+        } else {
+            // Click on white's move column (or move number)
+            pair_index * 2
+        };
+
+        if move_index < total_moves {
+            Some(PanelClickResult::SpecificMove(move_index))
+        } else {
+            Some(PanelClickResult::PanelArea)
+        }
     }
 
     fn calculate_board_position(&self, mouse: MouseEvent) -> Option<Position> {
@@ -520,6 +789,94 @@ impl Tui {
     fn set_status(&mut self, message: String) {
         self.status_message = message;
         self.status_timer = Some(Instant::now());
+    }
+
+    // History navigation helpers
+
+    fn enter_history_focus(&mut self, game_state: &GameState) {
+        if !self.show_history_panel {
+            self.show_history_panel = true;
+        }
+        self.history_focused = true;
+        // Select last move by default
+        let total = game_state.move_history.len();
+        self.selected_move_index = if total > 0 { Some(total - 1) } else { None };
+        self.viewing_history = false; // Still showing current position initially
+        self.set_status("Move panel: use arrows to navigate, Esc to exit".to_string());
+    }
+
+    fn exit_history_focus(&mut self) {
+        self.history_focused = false;
+        self.selected_move_index = None;
+        self.viewing_history = false;
+        self.history_scroll_offset = 0;
+        self.set_status("Exited move panel".to_string());
+    }
+
+    fn navigate_history(&mut self, delta: i32, game_state: &GameState) {
+        let total_moves = game_state.move_history.len();
+        if total_moves == 0 {
+            return;
+        }
+
+        let current = self.selected_move_index.unwrap_or(total_moves.saturating_sub(1));
+        let new_index = (current as i32 + delta).clamp(0, total_moves as i32 - 1) as usize;
+
+        self.selected_move_index = Some(new_index);
+        // We're viewing history if we're not at the latest move
+        self.viewing_history = new_index < total_moves.saturating_sub(1);
+
+        // Auto-scroll to keep selection visible
+        self.ensure_move_visible(new_index, game_state);
+
+        // Update status with move info
+        let move_num = (new_index / 2) + 1;
+        let is_white = new_index % 2 == 0;
+        self.set_status(format!(
+            "Move {}{} of {}",
+            move_num,
+            if is_white { "." } else { "..." },
+            (total_moves + 1) / 2
+        ));
+    }
+
+    fn ensure_move_visible(&mut self, move_index: usize, _game_state: &GameState) {
+        // Calculate which pair this move is in
+        let pair_index = move_index / 2;
+
+        // Estimate visible lines (we'll use a reasonable default; actual is calculated in draw)
+        // The history panel is typically around 20-30 lines visible
+        let estimated_visible_lines = 15usize;
+
+        // Scroll up if selection is above visible area
+        if pair_index < self.history_scroll_offset {
+            self.history_scroll_offset = pair_index;
+        }
+        // Scroll down if selection is below visible area
+        else if pair_index >= self.history_scroll_offset + estimated_visible_lines {
+            self.history_scroll_offset = pair_index.saturating_sub(estimated_visible_lines - 1);
+        }
+    }
+
+    fn jump_to_start(&mut self, game_state: &GameState) {
+        if game_state.move_history.is_empty() {
+            return;
+        }
+        self.selected_move_index = Some(0);
+        self.viewing_history = true;
+        self.history_scroll_offset = 0;
+        self.set_status("Jumped to first move".to_string());
+    }
+
+    fn jump_to_end(&mut self, game_state: &GameState) {
+        let total = game_state.move_history.len();
+        if total == 0 {
+            return;
+        }
+        self.selected_move_index = Some(total - 1);
+        self.viewing_history = false;
+        self.ensure_move_visible(total - 1, game_state);
+        self.set_status("Jumped to current position".to_string());
     }
 }
 
