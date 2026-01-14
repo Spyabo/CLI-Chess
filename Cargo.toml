@@ -1,10 +1,14 @@
 [package]
-name = "cli-chess"
+name = "pixel-chess"
 version = "0.1.0"
 edition = "2021"
-description = "A command line chess game implemented in Rust"
+description = "A terminal chess game with pixel art pieces, mouse support, and PGN save/load"
 authors = ["Reese Wright"]
 license = "MIT"
+repository = "https://github.com/Spyabo/pixel-chess"
+readme = "README.md"
+keywords = ["chess", "terminal", "tui", "game", "pixel-art"]
+categories = ["command-line-utilities", "games"]
 
 [dependencies]
 anyhow = "1.0"
