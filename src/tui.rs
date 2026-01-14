@@ -16,8 +16,8 @@ use ratatui::{
 
 use crate::{
     board::{GameState, Position, Move},
-    pieces::Color as PieceColor,
-    pixel_art::{calculate_board_layout, calculate_material, centered_rect, CapturedPiecesBar, GameOverModal, MoveHistoryPanel, PixelArtBoard, PieceSprites},
+    pieces::{Color as PieceColor, PieceType},
+    pixel_art::{calculate_board_layout, calculate_material, centered_rect, CapturedPiecesBar, GameOverModal, MoveHistoryPanel, PixelArtBoard, PieceSprites, PromotionModal},
 };
 
 type TuiResult<T> = Result<T, anyhow::Error>;
@@ -48,6 +48,9 @@ pub struct Tui {
     // Board flip state
     board_flipped: bool,                // true = black at bottom, false = white at bottom
     auto_flip_enabled: bool,            // true = flip automatically based on active color
+    // Promotion modal state
+    pending_promotion: Option<(Position, Position)>, // (from, to) of pending promotion move
+    promotion_selection: usize,         // Currently selected piece in modal (0-3)
 }
 
 impl Tui {
@@ -73,6 +76,8 @@ impl Tui {
             viewing_history: false,
             board_flipped: false,
             auto_flip_enabled: false,
+            pending_promotion: None,
+            promotion_selection: 0,
         })
     }
 
@@ -137,6 +142,10 @@ impl Tui {
         // Board flip state
         let board_flipped = self.board_flipped;
         let auto_flip_enabled = self.auto_flip_enabled;
+
+        // Promotion modal state
+        let pending_promotion = self.pending_promotion;
+        let promotion_selection = self.promotion_selection;
 
         // Get captured pieces for the capture bars
         let captured_by_white = game_state.captured_by_white.clone();
@@ -336,6 +345,17 @@ impl Tui {
                 let popup_area = centered_rect(36, 9, f.size());
                 f.render_widget(modal, popup_area);
             }
+
+            // Render promotion modal if pending
+            if pending_promotion.is_some() {
+                let mut modal = PromotionModal::new(use_unicode);
+                // Set the selection to match our state
+                for _ in 0..promotion_selection {
+                    modal.next();
+                }
+                let popup_area = centered_rect(40, 8, f.size());
+                f.render_widget(modal, popup_area);
+            }
         })?;
         Ok(())
     }
@@ -383,6 +403,64 @@ impl Tui {
     }
     
     fn handle_key_event(&mut self, key: KeyEvent, game_state: &mut GameState) -> TuiResult<()> {
+        // Handle promotion modal if active
+        if let Some((from, to)) = self.pending_promotion {
+            match key.code {
+                KeyCode::Left => {
+                    self.promotion_selection = (self.promotion_selection + 3) % 4; // prev
+                }
+                KeyCode::Right => {
+                    self.promotion_selection = (self.promotion_selection + 1) % 4; // next
+                }
+                KeyCode::Enter => {
+                    // Execute the move with the selected promotion piece
+                    let promotion_piece = self.get_promotion_piece();
+                    let is_capture = game_state.board.get_piece(to).is_some();
+                    let is_en_passant = game_state.board.get_piece(from)
+                        .map(|p| p.piece_type == PieceType::Pawn)
+                        .unwrap_or(false)
+                        && game_state.board.en_passant_target() == Some(to);
+
+                    if game_state.make_move(from, to, Some(promotion_piece)).is_ok() {
+                        if is_capture || is_en_passant {
+                            self.capture_animation = Some((to, Instant::now()));
+                        }
+                        let piece_name = match promotion_piece {
+                            PieceType::Queen => "Queen",
+                            PieceType::Rook => "Rook",
+                            PieceType::Bishop => "Bishop",
+                            PieceType::Knight => "Knight",
+                            _ => "piece",
+                        };
+                        self.set_status(format!("Promoted to {}", piece_name));
+                    }
+                    self.pending_promotion = None;
+                    self.promotion_selection = 0;
+                    self.deselect_piece();
+                }
+                KeyCode::Esc => {
+                    // Cancel promotion
+                    self.pending_promotion = None;
+                    self.promotion_selection = 0;
+                    self.set_status("Promotion cancelled".to_string());
+                }
+                KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    self.promotion_selection = 0; // Queen
+                }
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    self.promotion_selection = 1; // Rook
+                }
+                KeyCode::Char('b') | KeyCode::Char('B') => {
+                    self.promotion_selection = 2; // Bishop
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.promotion_selection = 3; // Knight
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
         // Handle history-focused mode separately
         if self.history_focused {
             match key.code {
@@ -492,6 +570,28 @@ impl Tui {
         self.set_status("Deselected piece".to_string());
     }
 
+    /// Check if a move from `from` to `to` is a pawn promotion
+    fn is_promotion_move(&self, from: Position, to: Position, game_state: &GameState) -> bool {
+        if let Some(piece) = game_state.board.get_piece(from) {
+            if piece.piece_type == PieceType::Pawn {
+                let promo_rank = if piece.color == PieceColor::White { 7 } else { 0 };
+                return to.rank() == promo_rank;
+            }
+        }
+        false
+    }
+
+    /// Get the currently selected promotion piece based on selection index
+    fn get_promotion_piece(&self) -> PieceType {
+        match self.promotion_selection {
+            0 => PieceType::Queen,
+            1 => PieceType::Rook,
+            2 => PieceType::Bishop,
+            3 => PieceType::Knight,
+            _ => PieceType::Queen,
+        }
+    }
+
     fn reset_game(&mut self, game_state: &mut GameState) {
         *game_state = GameState::new();
         self.selected_piece = None;
@@ -502,6 +602,9 @@ impl Tui {
         self.history_scroll_offset = 0;
         self.selected_move_index = None;
         self.viewing_history = false;
+        // Reset promotion state
+        self.pending_promotion = None;
+        self.promotion_selection = 0;
         self.set_status("Game reset".to_string());
     }
 
@@ -540,15 +643,24 @@ impl Tui {
             // Try to make a move
             if let Some(mv) = self.possible_moves.iter()
                 .find(|m| m.to == self.cursor_position) {
+                // Check if this is a promotion move
+                if self.is_promotion_move(mv.from, mv.to, game_state) {
+                    // Show promotion modal instead of executing immediately
+                    self.pending_promotion = Some((mv.from, mv.to));
+                    self.promotion_selection = 0; // Start with Queen selected
+                    self.set_status("Choose promotion piece".to_string());
+                    return Ok(());
+                }
+
                 // Check if this is a capture before making the move
                 let is_capture = game_state.board.get_piece(mv.to).is_some();
                 // Also check for en passant capture
                 let is_en_passant = game_state.board.get_piece(mv.from)
-                    .map(|p| p.piece_type == crate::pieces::PieceType::Pawn)
+                    .map(|p| p.piece_type == PieceType::Pawn)
                     .unwrap_or(false)
                     && game_state.board.en_passant_target() == Some(mv.to);
 
-                if game_state.make_move(mv.from, mv.to).is_ok() {
+                if game_state.make_move(mv.from, mv.to, None).is_ok() {
                     // Trigger capture animation if it was a capture
                     if is_capture || is_en_passant {
                         self.capture_animation = Some((mv.to, Instant::now()));
@@ -831,16 +943,25 @@ impl Tui {
             let is_valid_move = self.possible_moves.iter().any(|m| m.to == pos);
 
             if is_valid_move {
+                // Check if this is a promotion move
+                if self.is_promotion_move(selected_pos, pos, game_state) {
+                    // Show promotion modal instead of executing immediately
+                    self.pending_promotion = Some((selected_pos, pos));
+                    self.promotion_selection = 0;
+                    self.set_status("Choose promotion piece".to_string());
+                    return Ok(());
+                }
+
                 // Check if this is a capture before making the move
                 let is_capture = game_state.board.get_piece(pos).is_some();
                 // Also check for en passant capture
                 let is_en_passant = game_state.board.get_piece(selected_pos)
-                    .map(|p| p.piece_type == crate::pieces::PieceType::Pawn)
+                    .map(|p| p.piece_type == PieceType::Pawn)
                     .unwrap_or(false)
                     && game_state.board.en_passant_target() == Some(pos);
 
                 // Use make_move to ensure proper game state management
-                if game_state.make_move(selected_pos, pos).is_ok() {
+                if game_state.make_move(selected_pos, pos, None).is_ok() {
                     // Trigger capture animation if it was a capture
                     if is_capture || is_en_passant {
                         self.capture_animation = Some((pos, Instant::now()));

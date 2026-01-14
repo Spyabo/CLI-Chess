@@ -276,7 +276,7 @@ impl GameState {
         }
     }
     
-    pub fn make_move(&mut self, from: Position, to: Position) -> Result<(), String> {
+    pub fn make_move(&mut self, from: Position, to: Position, promotion: Option<PieceType>) -> Result<(), String> {
         // Save the current state for potential undo
         let original_state = self.board.clone();
         let original_move_history_len = self.move_history.len();
@@ -330,7 +330,7 @@ impl GameState {
         }
 
         // Try to make the move
-        if let Err(e) = self.board.move_piece(from, to) {
+        if let Err(e) = self.board.move_piece(from, to, promotion) {
             return Err(e);
         }
 
@@ -690,9 +690,9 @@ impl Board {
             
             // Create a temporary board for this move
             let mut board_copy = self.clone();
-            
-            // Make the move on the copy
-            if board_copy.move_piece(from, to).is_err() {
+
+            // Make the move on the copy (None for promotion - only checking legality)
+            if board_copy.move_piece(from, to, None).is_err() {
                 continue;
             }
             
@@ -741,7 +741,7 @@ impl Board {
         self.squares.remove(&pos)
     }
 
-    pub fn move_piece(&mut self, from: Position, to: Position) -> Result<(), String> {
+    pub fn move_piece(&mut self, from: Position, to: Position, promotion: Option<PieceType>) -> Result<(), String> {
         // Get the piece at the source position
         let mut piece = match self.get_piece(from) {
             Some(p) => p.clone(),
@@ -825,8 +825,8 @@ impl Board {
 
         // Handle pawn promotion before moving the piece
         if piece.piece_type == PieceType::Pawn && (to.rank() == 0 || to.rank() == 7) {
-            // Auto-promote to queen
-            piece.piece_type = PieceType::Queen;
+            // Use provided promotion piece, or default to Queen
+            piece.piece_type = promotion.unwrap_or(PieceType::Queen);
         }
         
         // Execute the move
