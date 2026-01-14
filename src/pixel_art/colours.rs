@@ -11,6 +11,8 @@ pub struct SquareColours {
     pub check: Color,
     pub capture_flash: Color,  // Bright flash on capture
     pub capture_fade: Color,   // Fade out after flash
+    pub last_move_light: Color, // Highlight for last move (light square)
+    pub last_move_dark: Color,  // Highlight for last move (dark square)
 }
 
 impl Default for SquareColours {
@@ -36,6 +38,10 @@ impl Default for SquareColours {
             // Capture animation colours
             capture_flash: Color::Rgb(255, 80, 80),  // Bright red flash
             capture_fade: Color::Rgb(255, 160, 80),  // Orange fade
+
+            // Last move highlight (pale yellow tones)
+            last_move_light: Color::Rgb(205, 210, 106), // Pale yellow for light squares
+            last_move_dark: Color::Rgb(170, 162, 58),   // Darker yellow for dark squares
         }
     }
 }

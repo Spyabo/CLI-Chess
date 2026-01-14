@@ -67,6 +67,7 @@ pub struct PixelArtBoard<'a> {
     sprites: &'a PieceSprites,
     colours: SquareColours,
     capture_animation: Option<(Position, Instant)>,
+    last_move: Option<(Position, Position)>, // (from, to) of the last move
 }
 
 impl<'a> PixelArtBoard<'a> {
@@ -77,6 +78,7 @@ impl<'a> PixelArtBoard<'a> {
         possible_moves: &'a [Move],
         sprites: &'a PieceSprites,
         capture_animation: Option<(Position, Instant)>,
+        last_move: Option<(Position, Position)>,
     ) -> Self {
         Self {
             game_state,
@@ -86,6 +88,7 @@ impl<'a> PixelArtBoard<'a> {
             sprites,
             colours: SquareColours::default(),
             capture_animation,
+            last_move,
         }
     }
 
@@ -128,6 +131,17 @@ impl<'a> PixelArtBoard<'a> {
                 && piece.color == self.game_state.active_color
             {
                 return self.colours.check;
+            }
+        }
+
+        // Last move highlight (from and to squares)
+        if let Some((from, to)) = self.last_move {
+            if pos == from || pos == to {
+                return if is_light {
+                    self.colours.last_move_light
+                } else {
+                    self.colours.last_move_dark
+                };
             }
         }
 

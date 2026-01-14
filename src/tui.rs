@@ -221,6 +221,17 @@ impl Tui {
                 (selected_piece, possible_moves.clone())
             };
 
+            // Calculate last move to highlight
+            let last_move = if viewing_history {
+                // When viewing history, highlight the selected historical move
+                selected_move_index.and_then(|idx| {
+                    move_history.get(idx).map(|m| (m.from, m.to))
+                })
+            } else {
+                // When viewing current position, highlight the most recent move
+                move_history.last().map(|m| (m.from, m.to))
+            };
+
             let board = PixelArtBoard::new(
                 board_game_state,
                 cursor_position,
@@ -228,6 +239,7 @@ impl Tui {
                 &shown_moves,
                 sprites,
                 if viewing_history { None } else { capture_animation },
+                last_move,
             );
 
             let status_bar = Paragraph::new(status_text.clone())
