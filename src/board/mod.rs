@@ -454,8 +454,8 @@ impl Board {
 
         // Check if an opposing pawn is attacking the position
         let pawn_squares = match by_color {
-            Color::White => [(-1, -1), (-1, 1)], 
-            Color::Black => [(1, -1), (1, 1)],
+            Color::White => [(-1, -1), (1, -1)],  // Check squares below (pawns attack upward)
+            Color::Black => [(-1, 1), (1, 1)],    // Check squares above (pawns attack downward)
         };
 
         for (dx, dy) in pawn_squares {

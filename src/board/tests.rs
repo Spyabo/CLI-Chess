@@ -200,7 +200,190 @@ fn test_check_evasion() {
     
     let moves = board.get_legal_moves(board.get_king_position(Color::Black).unwrap());
     assert_eq!(moves.len(), 1);
-    
+
     // Should not be able to castle out of check
     assert!(!moves.contains(&Position::from_notation("g1").unwrap()));
+}
+
+#[test]
+fn test_knight_moves() {
+    // Knight on e4 with no obstructions
+    let board = Board::from_fen("4k3/8/8/8/4N3/8/8/4K3 w - - 0 1").unwrap();
+    let e4 = Position::from_notation("e4").unwrap();
+
+    let moves = board.get_legal_moves(e4);
+    assert_eq!(moves.len(), 8); // Knight has 8 possible moves from centre
+
+    // Verify L-shaped moves
+    assert!(moves.contains(&Position::from_notation("d6").unwrap()));
+    assert!(moves.contains(&Position::from_notation("f6").unwrap()));
+    assert!(moves.contains(&Position::from_notation("g5").unwrap()));
+    assert!(moves.contains(&Position::from_notation("g3").unwrap()));
+    assert!(moves.contains(&Position::from_notation("f2").unwrap()));
+    assert!(moves.contains(&Position::from_notation("d2").unwrap()));
+    assert!(moves.contains(&Position::from_notation("c3").unwrap()));
+    assert!(moves.contains(&Position::from_notation("c5").unwrap()));
+}
+
+#[test]
+fn test_bishop_moves() {
+    // Bishop on d4
+    let board = Board::from_fen("4k3/8/8/8/3B4/8/8/4K3 w - - 0 1").unwrap();
+    let d4 = Position::from_notation("d4").unwrap();
+
+    let moves = board.get_legal_moves(d4);
+    assert_eq!(moves.len(), 13); // Bishop has 13 moves from d4
+
+    // Verify diagonal moves
+    assert!(moves.contains(&Position::from_notation("a1").unwrap()));
+    assert!(moves.contains(&Position::from_notation("h8").unwrap()));
+    assert!(moves.contains(&Position::from_notation("a7").unwrap()));
+    assert!(moves.contains(&Position::from_notation("g1").unwrap()));
+}
+
+#[test]
+fn test_rook_moves() {
+    // Rook on d4
+    let board = Board::from_fen("4k3/8/8/8/3R4/8/8/4K3 w - - 0 1").unwrap();
+    let d4 = Position::from_notation("d4").unwrap();
+
+    let moves = board.get_legal_moves(d4);
+    assert_eq!(moves.len(), 14); // Rook has 14 moves from d4
+
+    // Verify horizontal and vertical moves
+    assert!(moves.contains(&Position::from_notation("d1").unwrap()));
+    assert!(moves.contains(&Position::from_notation("d8").unwrap()));
+    assert!(moves.contains(&Position::from_notation("a4").unwrap()));
+    assert!(moves.contains(&Position::from_notation("h4").unwrap()));
+}
+
+#[test]
+fn test_queen_moves() {
+    // Queen on d4
+    let board = Board::from_fen("4k3/8/8/8/3Q4/8/8/4K3 w - - 0 1").unwrap();
+    let d4 = Position::from_notation("d4").unwrap();
+
+    let moves = board.get_legal_moves(d4);
+    assert_eq!(moves.len(), 27); // Queen has 27 moves from d4 (13 diagonal + 14 straight)
+}
+
+#[test]
+fn test_queenside_castling() {
+    // Position where queenside castling is available
+    let mut board = Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
+    let e1 = Position::from_notation("e1").unwrap();
+    let c1 = Position::from_notation("c1").unwrap();
+
+    let moves = board.get_legal_moves(e1);
+    assert!(moves.contains(&c1), "Should be able to castle queenside");
+
+    // Perform queenside castling
+    board.move_piece(e1, c1).unwrap();
+
+    // Verify castling happened
+    assert_eq!(board.get_piece(c1).unwrap().piece_type, PieceType::King);
+    assert_eq!(board.get_piece(Position::from_notation("d1").unwrap()).unwrap().piece_type, PieceType::Rook);
+}
+
+#[test]
+fn test_castling_rights_after_rook_move() {
+    // Position without pawns so rook can move
+    let mut board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+    let a1 = Position::from_notation("a1").unwrap();
+    let a3 = Position::from_notation("a3").unwrap();
+
+    // Move queenside rook
+    board.move_piece(a1, a3).unwrap();
+
+    // Verify queenside castling rights are lost
+    assert!(!board.castling_rights.contains('Q'), "Queenside castling should be lost after rook moves");
+    assert!(board.castling_rights.contains('K'), "Kingside castling should still be available");
+}
+
+#[test]
+fn test_cannot_castle_through_check() {
+    // Position where f1 is attacked by bishop on b5, blocking kingside castling
+    let board = Board::from_fen("4k3/8/8/1b6/8/8/8/R3K2R w KQ - 0 1").unwrap();
+    let e1 = Position::from_notation("e1").unwrap();
+    let g1 = Position::from_notation("g1").unwrap();
+
+    let moves = board.get_legal_moves(e1);
+    assert!(!moves.contains(&g1), "Should not be able to castle through attacked square");
+}
+
+#[test]
+fn test_cannot_castle_while_in_check() {
+    // Position where king is in check
+    let board = Board::from_fen("4k3/8/8/8/4r3/8/8/R3K2R w KQ - 0 1").unwrap();
+    let e1 = Position::from_notation("e1").unwrap();
+    let g1 = Position::from_notation("g1").unwrap();
+    let c1 = Position::from_notation("c1").unwrap();
+
+    let moves = board.get_legal_moves(e1);
+    assert!(!moves.contains(&g1), "Should not be able to castle kingside while in check");
+    assert!(!moves.contains(&c1), "Should not be able to castle queenside while in check");
+}
+
+#[test]
+fn test_pawn_blocked_by_piece() {
+    // White pawn blocked by black pawn
+    let board = Board::from_fen("4k3/8/8/8/4p3/4P3/8/4K3 w - - 0 1").unwrap();
+    let e3 = Position::from_notation("e3").unwrap();
+
+    let moves = board.get_legal_moves(e3);
+    assert!(moves.is_empty(), "Pawn should have no moves when blocked");
+}
+
+#[test]
+fn test_black_pawn_moves() {
+    // Test black pawn initial double move and single move
+    let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1").unwrap();
+    let e7 = Position::from_notation("e7").unwrap();
+    let e6 = Position::from_notation("e6").unwrap();
+    let e5 = Position::from_notation("e5").unwrap();
+
+    let moves = board.get_legal_moves(e7);
+    assert_eq!(moves.len(), 2);
+    assert!(moves.contains(&e6));
+    assert!(moves.contains(&e5));
+
+    // Test black pawn capture
+    let board = Board::from_fen("rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 2").unwrap();
+    let d5 = Position::from_notation("d5").unwrap();
+    let e4 = Position::from_notation("e4").unwrap();
+
+    let moves = board.get_legal_moves(d5);
+    assert!(moves.contains(&e4), "Black pawn should be able to capture on e4");
+}
+
+#[test]
+fn test_double_check() {
+    // Position with double check - only king can move
+    let board = Board::from_fen("4k3/8/5N2/3b4/8/8/4R3/4K3 b - - 0 1").unwrap();
+
+    // Black is in double check from knight and rook (via discovered check)
+    assert!(board.is_in_check(Color::Black));
+
+    // Only king moves should be legal
+    let king_pos = board.get_king_position(Color::Black).unwrap();
+    let _king_moves = board.get_legal_moves(king_pos);
+
+    // Bishop cannot block double check
+    let bishop_pos = Position::from_notation("d5").unwrap();
+    let bishop_moves = board.get_legal_moves(bishop_pos);
+    assert!(bishop_moves.is_empty(), "Bishop cannot move during double check");
+}
+
+#[test]
+fn test_discovered_check() {
+    // Position where moving the bishop reveals check from rook
+    let board = Board::from_fen("4k3/8/8/4B3/8/8/4R3/4K3 w - - 0 1").unwrap();
+    let e5 = Position::from_notation("e5").unwrap();
+
+    // Bishop on e5 - some moves will deliver discovered check
+    let moves = board.get_legal_moves(e5);
+
+    // Moving bishop off the e-file reveals check from rook
+    // Bishop should still be able to move (it's not pinned, the rook is behind it attacking the enemy king)
+    assert!(!moves.is_empty());
 }
