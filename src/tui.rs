@@ -17,7 +17,7 @@ use ratatui::{
 use crate::{
     board::{GameState, Position, Move},
     pieces::Color as PieceColor,
-    pixel_art::{calculate_board_layout, calculate_material, CapturedPiecesBar, PixelArtBoard, PieceSprites},
+    pixel_art::{calculate_board_layout, calculate_material, centered_rect, CapturedPiecesBar, GameOverModal, PixelArtBoard, PieceSprites},
 };
 
 type TuiResult<T> = Result<T, anyhow::Error>;
@@ -176,6 +176,24 @@ impl Tui {
             f.render_widget(board, chunks[2]);
             f.render_widget(white_captures_bar, chunks[3]);
             f.render_widget(status_bar, chunks[4]);
+
+            // Render game-over modal if applicable
+            if game_state.checkmate || game_state.stalemate {
+                let modal = if game_state.checkmate {
+                    // The winner is the opposite of active_color (who is in checkmate)
+                    let winner = match game_state.active_color {
+                        PieceColor::White => "Black",
+                        PieceColor::Black => "White",
+                    };
+                    GameOverModal::checkmate(winner)
+                } else {
+                    GameOverModal::stalemate()
+                };
+
+                // Centre the modal on screen
+                let popup_area = centered_rect(36, 9, f.size());
+                f.render_widget(modal, popup_area);
+            }
         })?;
         Ok(())
     }
