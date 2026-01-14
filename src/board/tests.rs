@@ -387,3 +387,133 @@ fn test_discovered_check() {
     // Bishop should still be able to move (it's not pinned, the rook is behind it attacking the enemy king)
     assert!(!moves.is_empty());
 }
+
+// =============================================================================
+// SCENARIO TESTS - Play through complete games
+// =============================================================================
+
+/// Helper to make a move from algebraic notation
+#[allow(dead_code)]
+fn make_move(game: &mut GameState, from: &str, to: &str) {
+    let from_pos = Position::from_notation(from).expect(&format!("Invalid from: {}", from));
+    let to_pos = Position::from_notation(to).expect(&format!("Invalid to: {}", to));
+    game.make_move(from_pos, to_pos).expect(&format!("Failed move: {} to {}", from, to));
+}
+
+#[test]
+fn test_fools_mate() {
+    // Fool's mate - fastest possible checkmate (4 half-moves)
+    // 1. f3 e5  2. g4 Qh4#
+    let mut game = GameState::new();
+
+    // 1. f3 (white weakens kingside)
+    make_move(&mut game, "f2", "f3");
+    assert!(!game.check);
+    assert!(!game.checkmate);
+
+    // 1... e5 (black develops)
+    make_move(&mut game, "e7", "e5");
+    assert!(!game.check);
+
+    // 2. g4 (white blunders)
+    make_move(&mut game, "g2", "g4");
+    assert!(!game.check);
+
+    // 2... Qh4# (checkmate!)
+    make_move(&mut game, "d8", "h4");
+
+    // Verify checkmate
+    assert!(game.check, "White king should be in check");
+    assert!(game.checkmate, "Should be checkmate");
+    assert!(!game.stalemate, "Should not be stalemate");
+    assert_eq!(game.active_color, Color::White, "White should be the one in checkmate");
+}
+
+#[test]
+fn test_scholars_mate() {
+    // Scholar's mate - classic 4-move checkmate
+    // 1. e4 e5  2. Bc4 Nc6  3. Qh5 Nf6  4. Qxf7#
+    let mut game = GameState::new();
+
+    // 1. e4
+    make_move(&mut game, "e2", "e4");
+    // 1... e5
+    make_move(&mut game, "e7", "e5");
+
+    // 2. Bc4 (bishop to c4, targeting f7)
+    make_move(&mut game, "f1", "c4");
+    // 2... Nc6
+    make_move(&mut game, "b8", "c6");
+
+    // 3. Qh5 (queen threatens mate)
+    make_move(&mut game, "d1", "h5");
+    // 3... Nf6 (black tries to defend but it's not enough)
+    make_move(&mut game, "g8", "f6");
+
+    // 4. Qxf7# (checkmate!)
+    make_move(&mut game, "h5", "f7");
+
+    // Verify checkmate
+    assert!(game.check, "Black king should be in check");
+    assert!(game.checkmate, "Should be checkmate");
+    assert!(!game.stalemate);
+    assert_eq!(game.active_color, Color::Black, "Black should be the one in checkmate");
+}
+
+#[test]
+fn test_back_rank_mate() {
+    // Set up a position where back rank mate is possible
+    // White rook delivers mate on black's back rank
+    let mut game = GameState::from_fen("6k1/5ppp/8/8/8/8/8/R3K3 w Q - 0 1").unwrap();
+
+    // Ra8# - back rank mate
+    make_move(&mut game, "a1", "a8");
+
+    assert!(game.checkmate, "Should be back rank checkmate");
+    assert_eq!(game.active_color, Color::Black);
+}
+
+#[test]
+fn test_smothered_mate() {
+    // Classic smothered mate position
+    // Knight on f7 delivers mate to king on h8, trapped by own rook on g8 and pawns
+    let game = GameState::from_fen("6rk/5Npp/8/8/8/8/8/4K3 b - - 0 1").unwrap();
+
+    // Black is already in checkmate from Nf7
+    assert!(game.check, "Black king should be in check");
+    assert!(game.checkmate, "Should be smothered mate");
+}
+
+#[test]
+fn test_capture_tracking_in_game() {
+    // Play a short game with captures and verify tracking
+    let mut game = GameState::new();
+
+    // 1. e4 d5 (Scandinavian Defense)
+    make_move(&mut game, "e2", "e4");
+    make_move(&mut game, "d7", "d5");
+
+    // 2. exd5 (capture)
+    assert!(game.captured_by_white.is_empty());
+    make_move(&mut game, "e4", "d5");
+    assert_eq!(game.captured_by_white.len(), 1, "White should have captured one piece");
+    assert_eq!(game.captured_by_white[0].piece_type, PieceType::Pawn);
+
+    // 2... Qxd5 (recapture)
+    make_move(&mut game, "d8", "d5");
+    assert_eq!(game.captured_by_black.len(), 1, "Black should have captured one piece");
+    assert_eq!(game.captured_by_black[0].piece_type, PieceType::Pawn);
+}
+
+#[test]
+fn test_stalemate_by_moves() {
+    // King and queen vs lone king - stalemate position
+    // Black king on a1, trapped by white king on a3 and queen on b3
+    // Queen on b3 doesn't check a1, but controls b1 and b2
+    // King on a3 controls a2
+    let game = GameState::from_fen("8/8/8/8/8/KQ6/8/k7 b - - 0 1").unwrap();
+
+    assert!(!game.check, "King should NOT be in check for stalemate");
+    assert!(game.stalemate, "Should be stalemate");
+    assert!(!game.checkmate, "Should NOT be checkmate");
+}
