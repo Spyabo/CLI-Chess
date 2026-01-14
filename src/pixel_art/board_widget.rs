@@ -68,6 +68,7 @@ pub struct PixelArtBoard<'a> {
     colours: SquareColours,
     capture_animation: Option<(Position, Instant)>,
     last_move: Option<(Position, Position)>, // (from, to) of the last move
+    flipped: bool, // true = black at bottom, false = white at bottom (default)
 }
 
 impl<'a> PixelArtBoard<'a> {
@@ -79,6 +80,7 @@ impl<'a> PixelArtBoard<'a> {
         sprites: &'a PieceSprites,
         capture_animation: Option<(Position, Instant)>,
         last_move: Option<(Position, Position)>,
+        flipped: bool,
     ) -> Self {
         Self {
             game_state,
@@ -89,6 +91,7 @@ impl<'a> PixelArtBoard<'a> {
             colours: SquareColours::default(),
             capture_animation,
             last_move,
+            flipped,
         }
     }
 
@@ -182,8 +185,9 @@ impl<'a> PixelArtBoard<'a> {
         square_width: usize,
         square_height: usize,
     ) {
-        let display_row = 7 - pos.y as usize;
-        let display_col = pos.x as usize;
+        // When flipped, black is at bottom (rank 8 at bottom, rank 1 at top)
+        let display_row = if self.flipped { pos.y as usize } else { 7 - pos.y as usize };
+        let display_col = if self.flipped { 7 - pos.x as usize } else { pos.x as usize };
 
         // Calculate pixel position in buffer
         let x_offset = board_area.x + (display_col * square_width) as u16;
@@ -310,11 +314,15 @@ impl<'a> PixelArtBoard<'a> {
         square_height: usize,
     ) {
         // Rank labels (1-8) on the left of the board
-        for rank in 0..8 {
-            let display_row = 7 - rank;
+        // When flipped: rank 8 at bottom, rank 1 at top
+        // When normal: rank 1 at bottom, rank 8 at top
+        for display_row in 0..8 {
             let y = board_area.y + (display_row * square_height) as u16 + (square_height / 2) as u16;
             let x = board_area.x.saturating_sub(2);
-            let label = ((rank + 1) as u8 + b'0') as char;
+            // In normal mode, top row (0) = rank 8, bottom row (7) = rank 1
+            // In flipped mode, top row (0) = rank 1, bottom row (7) = rank 8
+            let rank_num = if self.flipped { display_row + 1 } else { 8 - display_row };
+            let label = (rank_num as u8 + b'0') as char;
 
             if y < clip_area.bottom() && x >= clip_area.x && x < clip_area.right() {
                 buf.get_mut(x, y).set_char(label);
@@ -322,10 +330,15 @@ impl<'a> PixelArtBoard<'a> {
         }
 
         // File labels (a-h) at the bottom of the board
+        // When flipped: h on left, a on right
+        // When normal: a on left, h on right
         let bottom_y = board_area.y + board_area.height;
-        for file in 0..8 {
-            let x = board_area.x + (file * square_width) as u16 + (square_width / 2) as u16;
-            let label = (b'a' + file as u8) as char;
+        for display_col in 0..8 {
+            let x = board_area.x + (display_col * square_width) as u16 + (square_width / 2) as u16;
+            // In normal mode, left col (0) = 'a', right col (7) = 'h'
+            // In flipped mode, left col (0) = 'h', right col (7) = 'a'
+            let file_idx = if self.flipped { 7 - display_col } else { display_col };
+            let label = (b'a' + file_idx as u8) as char;
 
             if x < clip_area.right() && bottom_y < clip_area.bottom() {
                 buf.get_mut(x, bottom_y).set_char(label);
@@ -343,8 +356,9 @@ impl<'a> PixelArtBoard<'a> {
         square_width: usize,
         square_height: usize,
     ) {
-        let display_row = 7 - pos.y as usize;
-        let display_col = pos.x as usize;
+        // When flipped, black is at bottom (rank 8 at bottom, rank 1 at top)
+        let display_row = if self.flipped { pos.y as usize } else { 7 - pos.y as usize };
+        let display_col = if self.flipped { 7 - pos.x as usize } else { pos.x as usize };
 
         let x_offset = board_area.x + (display_col * square_width) as u16;
         let y_offset = board_area.y + (display_row * square_height) as u16;

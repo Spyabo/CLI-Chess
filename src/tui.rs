@@ -45,6 +45,9 @@ pub struct Tui {
     history_scroll_offset: usize,       // First visible move pair index
     selected_move_index: Option<usize>, // Which move is highlighted (0-based into move_history)
     viewing_history: bool,              // true = showing historical board state
+    // Board flip state
+    board_flipped: bool,                // true = black at bottom, false = white at bottom
+    auto_flip_enabled: bool,            // true = flip automatically based on active color
 }
 
 impl Tui {
@@ -68,6 +71,8 @@ impl Tui {
             history_scroll_offset: 0,
             selected_move_index: None,
             viewing_history: false,
+            board_flipped: false,
+            auto_flip_enabled: false,
         })
     }
 
@@ -129,6 +134,10 @@ impl Tui {
         let selected_move_index = self.selected_move_index;
         let viewing_history = self.viewing_history;
 
+        // Board flip state
+        let board_flipped = self.board_flipped;
+        let auto_flip_enabled = self.auto_flip_enabled;
+
         // Get captured pieces for the capture bars
         let captured_by_white = game_state.captured_by_white.clone();
         let captured_by_black = game_state.captured_by_black.clone();
@@ -168,11 +177,25 @@ impl Tui {
             let board_area_height = chunks[2].height.saturating_sub(2) as usize;
             let layout = calculate_board_layout(board_area_width, board_area_height);
 
-            // Create title with hints
-            let title_text = if !layout.use_sprites && !layout.too_small {
-                "CLI Chess (Q quit, R reset, H moves, N notation) | Fullscreen recommended"
+            // Create title with hints and flip indicator
+            let flip_indicator = if auto_flip_enabled {
+                "[Auto-flip]"
+            } else if board_flipped {
+                "[Flipped]"
             } else {
-                "CLI Chess (Q quit, R reset, H moves, N notation)"
+                ""
+            };
+
+            let title_text = if !layout.use_sprites && !layout.too_small {
+                format!(
+                    "CLI Chess (Q quit, R reset, H moves, N notation, f/F flip) {} | Fullscreen recommended",
+                    flip_indicator
+                )
+            } else {
+                format!(
+                    "CLI Chess (Q quit, R reset, H moves, N notation, f/F flip) {}",
+                    flip_indicator
+                )
             };
 
             let title = Paragraph::new(title_text)
@@ -232,6 +255,14 @@ impl Tui {
                 move_history.last().map(|m| (m.from, m.to))
             };
 
+            // Calculate effective flip state
+            // Auto-flip: flip when it's black's turn so current player is always at bottom
+            let effective_flip = if auto_flip_enabled {
+                game_state.active_color == PieceColor::Black
+            } else {
+                board_flipped
+            };
+
             let board = PixelArtBoard::new(
                 board_game_state,
                 cursor_position,
@@ -240,6 +271,7 @@ impl Tui {
                 sprites,
                 if viewing_history { None } else { capture_animation },
                 last_move,
+                effective_flip,
             );
 
             let status_bar = Paragraph::new(status_text.clone())
@@ -415,10 +447,37 @@ impl Tui {
                     if self.use_unicode_notation { "Unicode pieces" } else { "Letters" }
                 ));
             }
-            KeyCode::Up => self.move_cursor(0, 1),
-            KeyCode::Down => self.move_cursor(0, -1),
-            KeyCode::Left => self.move_cursor(-1, 0),
-            KeyCode::Right => self.move_cursor(1, 0),
+            KeyCode::Char('f') => {
+                // Manual flip toggle - also disables auto-flip
+                if self.auto_flip_enabled {
+                    // Get current visual state from auto-flip, then flip to opposite
+                    let current_auto_flip = game_state.active_color == PieceColor::Black;
+                    self.board_flipped = !current_auto_flip; // Flip to opposite of current
+                    self.auto_flip_enabled = false;
+                    self.set_status(format!(
+                        "Auto-flip disabled. {} at bottom",
+                        if self.board_flipped { "Black" } else { "White" }
+                    ));
+                } else {
+                    self.board_flipped = !self.board_flipped;
+                    self.set_status(format!(
+                        "Board flipped - {} at bottom",
+                        if self.board_flipped { "Black" } else { "White" }
+                    ));
+                }
+            }
+            KeyCode::Char('F') => {
+                // Auto-flip toggle (Shift+F)
+                self.auto_flip_enabled = !self.auto_flip_enabled;
+                self.set_status(format!(
+                    "Auto-flip {} (f=manual, F=auto)",
+                    if self.auto_flip_enabled { "enabled" } else { "disabled" }
+                ));
+            }
+            KeyCode::Up => self.move_cursor(0, 1, game_state),
+            KeyCode::Down => self.move_cursor(0, -1, game_state),
+            KeyCode::Left => self.move_cursor(-1, 0, game_state),
+            KeyCode::Right => self.move_cursor(1, 0, game_state),
             KeyCode::Enter => {
                 self.handle_enter_key(game_state)?;
             }
@@ -446,10 +505,24 @@ impl Tui {
         self.set_status("Game reset".to_string());
     }
 
-    fn move_cursor(&mut self, dx: i8, dy: i8) {
-        let new_x = (self.cursor_position.x as i8 + dx).clamp(0, 7);
-        let new_y = (self.cursor_position.y as i8 + dy).clamp(0, 7);
-        
+    fn move_cursor(&mut self, dx: i8, dy: i8, game_state: &GameState) {
+        // Calculate effective flip state
+        let effective_flip = if self.auto_flip_enabled {
+            game_state.active_color == PieceColor::Black
+        } else {
+            self.board_flipped
+        };
+
+        // When board is flipped, invert directions so arrow keys move visually
+        let (actual_dx, actual_dy) = if effective_flip {
+            (-dx, -dy)
+        } else {
+            (dx, dy)
+        };
+
+        let new_x = (self.cursor_position.x as i8 + actual_dx).clamp(0, 7);
+        let new_y = (self.cursor_position.y as i8 + actual_dy).clamp(0, 7);
+
         if let Some(new_pos) = Position::new(new_x, new_y) {
             self.cursor_position = new_pos;
         }
@@ -585,7 +658,7 @@ impl Tui {
             return Ok(());
         }
 
-        if let Some(pos) = self.calculate_board_position(mouse) {
+        if let Some(pos) = self.calculate_board_position(mouse, game_state) {
             self.handle_square_click(pos, game_state)?;
         }
 
@@ -682,7 +755,7 @@ impl Tui {
         }
     }
 
-    fn calculate_board_position(&self, mouse: MouseEvent) -> Option<Position> {
+    fn calculate_board_position(&self, mouse: MouseEvent, game_state: &GameState) -> Option<Position> {
         let term_size = self.terminal.size().ok()?;
 
         // Calculate the board area (matching the draw layout)
@@ -726,12 +799,25 @@ impl Tui {
         let rel_x = mouse.column.saturating_sub(board_x_offset) as usize;
         let rel_y = mouse.row.saturating_sub(board_y_offset) as usize;
 
-        let clicked_col = rel_x / square_width;
-        let clicked_row = 7usize.saturating_sub(rel_y / square_height);
+        let screen_col = rel_x / square_width;
+        let screen_row = rel_y / square_height;
 
-        if clicked_col >= 8 || clicked_row >= 8 {
+        if screen_col >= 8 || screen_row >= 8 {
             return None;
         }
+
+        // Calculate effective flip state (same as in draw)
+        let effective_flip = if self.auto_flip_enabled {
+            game_state.active_color == PieceColor::Black
+        } else {
+            self.board_flipped
+        };
+
+        // Convert screen coordinates to board coordinates
+        // Normal: screen_col 0 = file a, screen_row 0 = rank 8
+        // Flipped: screen_col 0 = file h, screen_row 0 = rank 1
+        let clicked_col = if effective_flip { 7 - screen_col } else { screen_col };
+        let clicked_row = if effective_flip { screen_row } else { 7 - screen_row };
 
         Position::new(clicked_col as i8, clicked_row as i8)
     }
