@@ -16,8 +16,9 @@ use ratatui::{
 
 use crate::{
     board::{GameState, Position, Move},
+    pgn,
     pieces::{Color as PieceColor, PieceType},
-    pixel_art::{calculate_board_layout, calculate_material, centered_rect, CapturedPiecesBar, GameOverModal, MoveHistoryPanel, PixelArtBoard, PieceSprites, PromotionModal},
+    pixel_art::{calculate_board_layout, calculate_material, centered_rect, CapturedPiecesBar, GameOverModal, LoadGameModal, MoveHistoryPanel, PixelArtBoard, PieceSprites, PromotionModal, SaveGameModal},
 };
 
 type TuiResult<T> = Result<T, anyhow::Error>;
@@ -51,6 +52,13 @@ pub struct Tui {
     // Promotion modal state
     pending_promotion: Option<(Position, Position)>, // (from, to) of pending promotion move
     promotion_selection: usize,         // Currently selected piece in modal (0-3)
+    // Load game modal state
+    load_modal: Option<LoadGameModal>,
+    // Save game modal state
+    save_modal: Option<SaveGameModal>,
+    // Player names (from save or load)
+    white_player: String,
+    black_player: String,
 }
 
 impl Tui {
@@ -78,6 +86,10 @@ impl Tui {
             auto_flip_enabled: false,
             pending_promotion: None,
             promotion_selection: 0,
+            load_modal: None,
+            save_modal: None,
+            white_player: "White".to_string(),
+            black_player: "Black".to_string(),
         })
     }
 
@@ -147,6 +159,16 @@ impl Tui {
         let pending_promotion = self.pending_promotion;
         let promotion_selection = self.promotion_selection;
 
+        // Load modal state (clone for rendering since Widget consumes self)
+        let load_modal = self.load_modal.clone();
+
+        // Save modal state (clone for rendering since Widget consumes self)
+        let save_modal = self.save_modal.clone();
+
+        // Player names for captured pieces bars
+        let white_player = self.white_player.clone();
+        let black_player = self.black_player.clone();
+
         // Get captured pieces for the capture bars
         let captured_by_white = game_state.captured_by_white.clone();
         let captured_by_black = game_state.captured_by_black.clone();
@@ -197,12 +219,12 @@ impl Tui {
 
             let title_text = if !layout.use_sprites && !layout.too_small {
                 format!(
-                    "CLI Chess (Q quit, R reset, H moves, N notation, f/F flip) {} | Fullscreen recommended",
+                    "CLI Chess (Q quit, R reset, H history, S save, L load, f/F flip) {} | Fullscreen recommended",
                     flip_indicator
                 )
             } else {
                 format!(
-                    "CLI Chess (Q quit, R reset, H moves, N notation, f/F flip) {}",
+                    "CLI Chess (Q quit, R reset, H history, S save, L load, f/F flip) {}",
                     flip_indicator
                 )
             };
@@ -219,14 +241,14 @@ impl Tui {
             // Black's captures are shown at the top (white pieces black has taken)
             let black_captures_bar = CapturedPiecesBar::new(
                 &captured_by_black,
-                "Black",
+                &black_player,
                 black_material.saturating_sub(white_material).max(0),
             );
 
             // White's captures are shown at the bottom (black pieces white has taken)
             let white_captures_bar = CapturedPiecesBar::new(
                 &captured_by_white,
-                "White",
+                &white_player,
                 white_material.saturating_sub(black_material).max(0),
             );
 
@@ -356,6 +378,18 @@ impl Tui {
                 let popup_area = centered_rect(40, 8, f.size());
                 f.render_widget(modal, popup_area);
             }
+
+            // Render save game modal if active
+            if let Some(modal) = save_modal {
+                let popup_area = centered_rect(40, 9, f.size());
+                f.render_widget(modal, popup_area);
+            }
+
+            // Render load game modal if active
+            if let Some(modal) = load_modal {
+                let popup_area = centered_rect(50, 16, f.size());
+                f.render_widget(modal, popup_area);
+            }
         })?;
         Ok(())
     }
@@ -461,6 +495,88 @@ impl Tui {
             return Ok(());
         }
 
+        // Handle save game modal if active
+        if let Some(ref mut modal) = self.save_modal {
+            match key.code {
+                KeyCode::Esc => {
+                    self.save_modal = None;
+                    self.set_status("Save cancelled".to_string());
+                }
+                KeyCode::Tab | KeyCode::Down | KeyCode::Up => {
+                    modal.next_field();
+                }
+                KeyCode::Enter => {
+                    let white_name = modal.white_name().to_string();
+                    let black_name = modal.black_name().to_string();
+                    let filename = pgn::generate_save_filename(&white_name, &black_name);
+                    match pgn::export_pgn(game_state, &filename, &white_name, &black_name) {
+                        Ok(()) => {
+                            // Store player names for display
+                            self.white_player = white_name;
+                            self.black_player = black_name;
+                            self.set_status(format!("Game saved to {}", filename));
+                        }
+                        Err(e) => self.set_status(format!("Save failed: {}", e)),
+                    }
+                    self.save_modal = None;
+                }
+                KeyCode::Backspace => {
+                    modal.backspace();
+                }
+                KeyCode::Char(c) => {
+                    modal.add_char(c);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // Handle load game modal if active
+        if let Some(ref mut modal) = self.load_modal {
+            match key.code {
+                KeyCode::Esc => {
+                    self.load_modal = None;
+                    self.set_status("Load cancelled".to_string());
+                }
+                KeyCode::Enter => {
+                    if let Some(filename) = modal.selected_file() {
+                        let filename = filename.to_string();
+                        match pgn::import_pgn(&filename) {
+                            Ok(loaded) => {
+                                *game_state = loaded;
+                                // Parse and store player names from the PGN
+                                if let Ok((white, black)) = pgn::parse_player_names(&filename) {
+                                    self.white_player = white;
+                                    self.black_player = black;
+                                }
+                                self.deselect_piece();
+                                self.exit_history_focus();
+                                self.set_status(format!("Loaded {}", filename));
+                            }
+                            Err(e) => {
+                                self.set_status(format!("Load failed: {}", e));
+                            }
+                        }
+                    }
+                    self.load_modal = None;
+                }
+                KeyCode::Up => {
+                    modal.prev();
+                }
+                KeyCode::Down => {
+                    modal.next();
+                }
+                KeyCode::Backspace => {
+                    modal.backspace();
+                }
+                KeyCode::Char(c) => {
+                    modal.add_char(c);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
         // Handle history-focused mode separately
         if self.history_focused {
             match key.code {
@@ -552,6 +668,16 @@ impl Tui {
                     if self.auto_flip_enabled { "enabled" } else { "disabled" }
                 ));
             }
+            KeyCode::Char('s') => {
+                // Open save game modal
+                self.save_modal = Some(SaveGameModal::new());
+            }
+            KeyCode::Char('l') => {
+                // Open load game modal
+                let mut modal = LoadGameModal::new();
+                modal.refresh();
+                self.load_modal = Some(modal);
+            }
             KeyCode::Up => self.move_cursor(0, 1, game_state),
             KeyCode::Down => self.move_cursor(0, -1, game_state),
             KeyCode::Left => self.move_cursor(-1, 0, game_state),
@@ -605,6 +731,9 @@ impl Tui {
         // Reset promotion state
         self.pending_promotion = None;
         self.promotion_selection = 0;
+        // Reset player names
+        self.white_player = "White".to_string();
+        self.black_player = "Black".to_string();
         self.set_status("Game reset".to_string());
     }
 

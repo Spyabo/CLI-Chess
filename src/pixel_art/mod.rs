@@ -2,15 +2,19 @@ mod board_widget;
 mod captured_bar;
 mod colours;
 mod game_over_modal;
+mod load_game_modal;
 mod move_history;
 mod promotion_modal;
+mod save_game_modal;
 mod sprites;
 
 pub use board_widget::{calculate_board_layout, PixelArtBoard};
 pub use captured_bar::{calculate_material, CapturedPiecesBar};
 pub use game_over_modal::{centered_rect, GameOverModal};
+pub use load_game_modal::LoadGameModal;
 pub use move_history::MoveHistoryPanel;
 pub use promotion_modal::PromotionModal;
+pub use save_game_modal::SaveGameModal;
 pub use sprites::PieceSprites;
 
 use ratatui::style::Color;

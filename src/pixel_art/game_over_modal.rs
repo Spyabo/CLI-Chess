@@ -95,7 +95,7 @@ impl Widget for GameOverModal {
         }
 
         // Render instructions
-        let instructions = "[R] New Game    [Q] Quit";
+        let instructions = "[S] Save  [R] New Game  [Q] Quit";
         let instructions_style = Style::default().fg(Color::Rgb(150, 150, 150));
         let instructions_y = start_y + 4;
         let instructions_x = inner.x + (inner.width.saturating_sub(instructions.len() as u16)) / 2;

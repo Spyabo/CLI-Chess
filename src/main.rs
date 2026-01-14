@@ -1,5 +1,6 @@
 mod board;
 mod moves;
+mod pgn;
 mod pieces;
 mod pixel_art;
 mod tui;
