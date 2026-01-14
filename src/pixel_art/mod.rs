@@ -1,8 +1,10 @@
 mod board_widget;
+mod captured_bar;
 mod colours;
 mod sprites;
 
 pub use board_widget::{calculate_board_layout, PixelArtBoard};
+pub use captured_bar::{calculate_material, CapturedPiecesBar};
 pub use sprites::PieceSprites;
 
 use ratatui::style::Color;

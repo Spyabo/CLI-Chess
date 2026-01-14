@@ -33,6 +33,8 @@ pub struct GameState {
     pub valid_moves: HashSet<Position>,
     pub position_history: HashMap<String, u8>,
     pub current_pieces: HashMap<Color, HashSet<(PieceType, Position)>>,
+    pub captured_by_white: Vec<Piece>,  // Black pieces captured by white
+    pub captured_by_black: Vec<Piece>,  // White pieces captured by black
 }
 
 impl Default for GameState {
@@ -50,8 +52,10 @@ impl Default for GameState {
             valid_moves: HashSet::new(),
             position_history: HashMap::new(),
             current_pieces: HashMap::new(),
+            captured_by_white: Vec::new(),
+            captured_by_black: Vec::new(),
         };
-        
+
         // Initialize current_pieces from the board
         game_state.init_current_pieces();
         game_state.record_position();
@@ -63,7 +67,7 @@ impl GameState {
     pub fn new() -> Self {
         let mut board = Board::default();
         board.load_fen(STARTING_FEN).unwrap();
-        
+
         let mut game_state = Self {
             board,
             active_color: Color::White,
@@ -74,6 +78,8 @@ impl GameState {
             stalemate: false,
             position_history: HashMap::new(),
             current_pieces: HashMap::new(),
+            captured_by_white: Vec::new(),
+            captured_by_black: Vec::new(),
         };
         
         // Initialize current_pieces   
@@ -101,8 +107,10 @@ impl GameState {
             stalemate: false,
             position_history: HashMap::new(),
             current_pieces: HashMap::new(),
+            captured_by_white: Vec::new(),
+            captured_by_black: Vec::new(),
         };
-        
+
         // Initialize current_pieces from the FEN position
         game_state.init_current_pieces();
         
@@ -207,16 +215,37 @@ impl GameState {
             None => return Err("No piece at source position".to_string()),
         };
         
-        // Check if this is a capture
-        let captured_piece = self.board.get_piece(to).cloned();
-        
+        // Check if this is a capture (including en passant)
+        let mut captured_piece = self.board.get_piece(to).cloned();
+
+        // Check for en passant capture
+        let is_en_passant = moving_piece.piece_type == PieceType::Pawn
+            && self.board.en_passant_target() == Some(to)
+            && captured_piece.is_none();
+
+        if is_en_passant {
+            // En passant: captured pawn is on same file as destination but same rank as origin
+            let ep_capture_pos = Position::new(to.file() as i8, from.rank() as i8).unwrap();
+            captured_piece = self.board.get_piece(ep_capture_pos).cloned();
+        }
+
         // Check if this is a pawn move (which resets the position history)
         let is_pawn_move = moving_piece.piece_type == PieceType::Pawn;
         let is_reset_move = captured_piece.is_some() || is_pawn_move;
-        
-        // Handle capture
-        if let Some(captured) = captured_piece {
-            self.remove_piece_from_tracking(to, &captured);
+
+        // Handle capture tracking
+        if let Some(ref captured) = captured_piece {
+            if is_en_passant {
+                let ep_capture_pos = Position::new(to.file() as i8, from.rank() as i8).unwrap();
+                self.remove_piece_from_tracking(ep_capture_pos, captured);
+            } else {
+                self.remove_piece_from_tracking(to, captured);
+            }
+            // Track the captured piece for display
+            match moving_piece.color {
+                Color::White => self.captured_by_white.push(captured.clone()),
+                Color::Black => self.captured_by_black.push(captured.clone()),
+            }
         }
         
         // Try to make the move

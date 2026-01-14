@@ -9,6 +9,8 @@ pub struct SquareColours {
     pub legal_move_light: Color,
     pub legal_move_dark: Color,
     pub check: Color,
+    pub capture_flash: Color,  // Bright flash on capture
+    pub capture_fade: Color,   // Fade out after flash
 }
 
 impl Default for SquareColours {
@@ -30,6 +32,10 @@ impl Default for SquareColours {
 
             // King in check
             check: Color::Rgb(220, 80, 80), // Red
+
+            // Capture animation colours
+            capture_flash: Color::Rgb(255, 80, 80),  // Bright red flash
+            capture_fade: Color::Rgb(255, 160, 80),  // Orange fade
         }
     }
 }

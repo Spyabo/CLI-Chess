@@ -17,7 +17,7 @@ use ratatui::{
 use crate::{
     board::{GameState, Position, Move},
     pieces::Color as PieceColor,
-    pixel_art::{calculate_board_layout, PixelArtBoard, PieceSprites},
+    pixel_art::{calculate_board_layout, calculate_material, CapturedPiecesBar, PixelArtBoard, PieceSprites},
 };
 
 type TuiResult<T> = Result<T, anyhow::Error>;
@@ -32,6 +32,7 @@ pub struct Tui {
     possible_moves: Vec<Move>,
     should_quit: bool,
     sprites: PieceSprites,
+    capture_animation: Option<(Position, Instant)>,  // Position and start time of capture flash
 }
 
 impl Tui {
@@ -49,6 +50,7 @@ impl Tui {
             possible_moves: Vec::new(),
             should_quit: false,
             sprites: PieceSprites::default(),
+            capture_animation: None,
         })
     }
 
@@ -87,12 +89,24 @@ impl Tui {
             }
         }
 
+        // Clear expired capture animation (500ms duration)
+        if let Some((_, start_time)) = self.capture_animation {
+            if start_time.elapsed().as_millis() >= 500 {
+                self.capture_animation = None;
+            }
+        }
+
         // Extract the data we need before borrowing terminal mutably
         let cursor_position = self.cursor_position;
         let selected_piece = self.selected_piece;
         let possible_moves = self.possible_moves.clone();
         let status_text = self.get_status_text(game_state);
         let sprites = &self.sprites;
+        let capture_animation = self.capture_animation;
+
+        // Get captured pieces for the capture bars
+        let captured_by_white = game_state.captured_by_white.clone();
+        let captured_by_black = game_state.captured_by_black.clone();
 
         self.terminal.draw(|f| {
             let chunks = Layout::default()
@@ -100,14 +114,16 @@ impl Tui {
                 .margin(1)
                 .constraints([
                     Constraint::Length(2),      // Title
-                    Constraint::Percentage(85), // Board
+                    Constraint::Length(1),      // Black's captures (white pieces they took)
+                    Constraint::Min(10),        // Board (flexible)
+                    Constraint::Length(1),      // White's captures (black pieces they took)
                     Constraint::Length(2),      // Status bar
                 ])
                 .split(f.size());
 
             // Calculate board layout to determine if we're in sprite mode
-            let board_area_width = chunks[1].width.saturating_sub(3) as usize;
-            let board_area_height = chunks[1].height.saturating_sub(2) as usize;
+            let board_area_width = chunks[2].width.saturating_sub(3) as usize;
+            let board_area_height = chunks[2].height.saturating_sub(2) as usize;
             let layout = calculate_board_layout(board_area_width, board_area_height);
 
             // Create title with fullscreen hint if needed
@@ -121,6 +137,25 @@ impl Tui {
                 .style(Style::default().add_modifier(Modifier::BOLD))
                 .alignment(ratatui::layout::Alignment::Center);
 
+            // Calculate material advantage
+            let white_material = calculate_material(&captured_by_white);
+            let black_material = calculate_material(&captured_by_black);
+
+            // Create captured pieces bars
+            // Black's captures are shown at the top (white pieces black has taken)
+            let black_captures_bar = CapturedPiecesBar::new(
+                &captured_by_black,
+                "Black",
+                black_material.saturating_sub(white_material).max(0),
+            );
+
+            // White's captures are shown at the bottom (black pieces white has taken)
+            let white_captures_bar = CapturedPiecesBar::new(
+                &captured_by_white,
+                "White",
+                white_material.saturating_sub(black_material).max(0),
+            );
+
             // Create board widget
             let board = PixelArtBoard::new(
                 game_state,
@@ -128,6 +163,7 @@ impl Tui {
                 selected_piece,
                 &possible_moves,
                 sprites,
+                capture_animation,
             );
 
             let status_bar = Paragraph::new(status_text.clone())
@@ -136,8 +172,10 @@ impl Tui {
 
             // Render all widgets
             f.render_widget(title, chunks[0]);
-            f.render_widget(board, chunks[1]);
-            f.render_widget(status_bar, chunks[2]);
+            f.render_widget(black_captures_bar, chunks[1]);
+            f.render_widget(board, chunks[2]);
+            f.render_widget(white_captures_bar, chunks[3]);
+            f.render_widget(status_bar, chunks[4]);
         })?;
         Ok(())
     }
@@ -221,6 +259,7 @@ impl Tui {
         *game_state = GameState::new();
         self.selected_piece = None;
         self.possible_moves.clear();
+        self.capture_animation = None;
         self.set_status("Game reset".to_string());
     }
 
@@ -246,9 +285,20 @@ impl Tui {
             // Try to make a move
             if let Some(mv) = self.possible_moves.iter()
                 .find(|m| m.to == self.cursor_position) {
-                if game_state.board.move_piece(mv.from, mv.to).is_ok() {
+                // Check if this is a capture before making the move
+                let is_capture = game_state.board.get_piece(mv.to).is_some();
+                // Also check for en passant capture
+                let is_en_passant = game_state.board.get_piece(mv.from)
+                    .map(|p| p.piece_type == crate::pieces::PieceType::Pawn)
+                    .unwrap_or(false)
+                    && game_state.board.en_passant_target() == Some(mv.to);
+
+                if game_state.make_move(mv.from, mv.to).is_ok() {
+                    // Trigger capture animation if it was a capture
+                    if is_capture || is_en_passant {
+                        self.capture_animation = Some((mv.to, Instant::now()));
+                    }
                     self.set_status(format!("Moved {}", mv));
-                    self.switch_turn(game_state);
                 }
             }
             self.deselect_piece();
@@ -274,13 +324,6 @@ impl Tui {
                 self.set_status(format!("Selected {} at {}", piece, self.cursor_position));
             }
         }
-    }
-
-    fn switch_turn(&mut self, game_state: &mut GameState) {
-        game_state.active_color = match game_state.active_color {
-            PieceColor::White => PieceColor::Black,
-            PieceColor::Black => PieceColor::White,
-        };
     }
 
     fn handle_mouse_event(&mut self, mouse: MouseEvent, game_state: &mut GameState) -> TuiResult<()> {
@@ -355,15 +398,20 @@ impl Tui {
     fn handle_square_click(&mut self, pos: Position, game_state: &mut GameState) -> TuiResult<()> {
         if let Some(selected_pos) = game_state.selected_square {
             if game_state.valid_moves.contains(&pos) {
-                // Create move manually since Move::new doesn't exist
-                let mv = Move {
-                    from: selected_pos,
-                    to: pos,
-                    promotion: None,
-                };
+                // Check if this is a capture before making the move
+                let is_capture = game_state.board.get_piece(pos).is_some();
+                // Also check for en passant capture
+                let is_en_passant = game_state.board.get_piece(selected_pos)
+                    .map(|p| p.piece_type == crate::pieces::PieceType::Pawn)
+                    .unwrap_or(false)
+                    && game_state.board.en_passant_target() == Some(pos);
+
                 // Use make_move to ensure proper game state management
-                if game_state.make_move(mv.from, mv.to).is_ok() {
-                    self.switch_turn(game_state);
+                if game_state.make_move(selected_pos, pos).is_ok() {
+                    // Trigger capture animation if it was a capture
+                    if is_capture || is_en_passant {
+                        self.capture_animation = Some((pos, Instant::now()));
+                    }
                 }
             } else {
                 self.try_select_new_piece(pos, game_state);

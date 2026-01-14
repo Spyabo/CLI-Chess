@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -64,6 +66,7 @@ pub struct PixelArtBoard<'a> {
     possible_moves: &'a [Move],
     sprites: &'a PieceSprites,
     colours: SquareColours,
+    capture_animation: Option<(Position, Instant)>,
 }
 
 impl<'a> PixelArtBoard<'a> {
@@ -73,6 +76,7 @@ impl<'a> PixelArtBoard<'a> {
         selected_piece: Option<Position>,
         possible_moves: &'a [Move],
         sprites: &'a PieceSprites,
+        capture_animation: Option<(Position, Instant)>,
     ) -> Self {
         Self {
             game_state,
@@ -81,6 +85,7 @@ impl<'a> PixelArtBoard<'a> {
             possible_moves,
             sprites,
             colours: SquareColours::default(),
+            capture_animation,
         }
     }
 
@@ -101,7 +106,20 @@ impl<'a> PixelArtBoard<'a> {
     fn get_square_colour(&self, pos: Position) -> Color {
         let is_light = (pos.x + pos.y) % 2 == 1;
 
-        // Priority order: check > selected > cursor > legal_move > base
+        // Priority order: capture_animation > check > selected > cursor > legal_move > base
+
+        // Check for capture animation (highest priority)
+        if let Some((anim_pos, start_time)) = self.capture_animation {
+            if anim_pos == pos {
+                let elapsed_ms = start_time.elapsed().as_millis();
+                if elapsed_ms < 250 {
+                    return self.colours.capture_flash;  // Bright red flash
+                } else if elapsed_ms < 500 {
+                    return self.colours.capture_fade;   // Orange fade
+                }
+                // After 500ms, fall through to normal colour
+            }
+        }
 
         // Check if this square has king in check
         if let Some(piece) = self.game_state.board.get_piece(pos) {
