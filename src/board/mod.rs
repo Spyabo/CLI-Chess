@@ -22,6 +22,94 @@ impl fmt::Display for Move {
     }
 }
 
+/// A recorded move with all details needed for algebraic notation
+#[derive(Debug, Clone)]
+pub struct MoveRecord {
+    pub piece: PieceType,
+    pub color: Color,
+    pub from: Position,
+    pub to: Position,
+    pub captured: Option<PieceType>,
+    pub is_check: bool,
+    pub is_checkmate: bool,
+    pub is_castling: Option<bool>,  // Some(true) = kingside, Some(false) = queenside
+    pub promotion: Option<PieceType>,
+}
+
+impl MoveRecord {
+    /// Convert to algebraic notation (e.g., "Nf3", "Qxd7+", "O-O")
+    pub fn to_algebraic(&self, use_unicode: bool) -> String {
+        // Castling
+        if let Some(kingside) = self.is_castling {
+            return if kingside { "O-O".to_string() } else { "O-O-O".to_string() };
+        }
+
+        let mut notation = String::new();
+
+        // Piece letter/symbol (pawns omitted)
+        if self.piece != PieceType::Pawn {
+            if use_unicode {
+                notation.push(match (self.piece, self.color) {
+                    (PieceType::King, Color::White) => '♔',
+                    (PieceType::Queen, Color::White) => '♕',
+                    (PieceType::Rook, Color::White) => '♖',
+                    (PieceType::Bishop, Color::White) => '♗',
+                    (PieceType::Knight, Color::White) => '♘',
+                    (PieceType::King, Color::Black) => '♚',
+                    (PieceType::Queen, Color::Black) => '♛',
+                    (PieceType::Rook, Color::Black) => '♜',
+                    (PieceType::Bishop, Color::Black) => '♝',
+                    (PieceType::Knight, Color::Black) => '♞',
+                    _ => ' ',
+                });
+            } else {
+                notation.push(match self.piece {
+                    PieceType::King => 'K',
+                    PieceType::Queen => 'Q',
+                    PieceType::Rook => 'R',
+                    PieceType::Bishop => 'B',
+                    PieceType::Knight => 'N',
+                    _ => ' ',
+                });
+            }
+        }
+
+        // Capture indicator
+        if self.captured.is_some() {
+            if self.piece == PieceType::Pawn {
+                // Pawn captures show file of origin
+                let file = (b'a' + self.from.x as u8) as char;
+                notation.push(file);
+            }
+            notation.push('x');
+        }
+
+        // Destination square
+        notation.push_str(&self.to.to_notation());
+
+        // Promotion
+        if let Some(promo) = self.promotion {
+            notation.push('=');
+            notation.push(match promo {
+                PieceType::Queen => 'Q',
+                PieceType::Rook => 'R',
+                PieceType::Bishop => 'B',
+                PieceType::Knight => 'N',
+                _ => '?',
+            });
+        }
+
+        // Check/checkmate
+        if self.is_checkmate {
+            notation.push('#');
+        } else if self.is_check {
+            notation.push('+');
+        }
+
+        notation
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GameState {
     pub board: Board,
@@ -33,6 +121,7 @@ pub struct GameState {
     pub current_pieces: HashMap<Color, HashSet<(PieceType, Position)>>,
     pub captured_by_white: Vec<Piece>,  // Black pieces captured by white
     pub captured_by_black: Vec<Piece>,  // White pieces captured by black
+    pub move_history: Vec<MoveRecord>,  // All moves played in this game
 }
 
 impl Default for GameState {
@@ -50,6 +139,7 @@ impl Default for GameState {
             current_pieces: HashMap::new(),
             captured_by_white: Vec::new(),
             captured_by_black: Vec::new(),
+            move_history: Vec::new(),
         };
 
         // Initialize current_pieces from the board
@@ -74,6 +164,7 @@ impl GameState {
             current_pieces: HashMap::new(),
             captured_by_white: Vec::new(),
             captured_by_black: Vec::new(),
+            move_history: Vec::new(),
         };
         
         // Initialize current_pieces   
@@ -101,6 +192,7 @@ impl GameState {
             current_pieces: HashMap::new(),
             captured_by_white: Vec::new(),
             captured_by_black: Vec::new(),
+            move_history: Vec::new(),
         };
 
         // Initialize current_pieces from the FEN position
@@ -183,13 +275,14 @@ impl GameState {
     pub fn make_move(&mut self, from: Position, to: Position) -> Result<(), String> {
         // Save the current state for potential undo
         let original_state = self.board.clone();
-        
+        let original_move_history_len = self.move_history.len();
+
         // Get the moving piece before the move
         let moving_piece = match self.board.get_piece(from) {
             Some(p) => p.clone(),
             None => return Err("No piece at source position".to_string()),
         };
-        
+
         // Check if this is a capture (including en passant)
         let mut captured_piece = self.board.get_piece(to).cloned();
 
@@ -203,6 +296,15 @@ impl GameState {
             let ep_capture_pos = Position::new(to.file() as i8, from.rank() as i8).unwrap();
             captured_piece = self.board.get_piece(ep_capture_pos).cloned();
         }
+
+        // Detect castling (king moves 2 squares horizontally)
+        let is_castling = moving_piece.piece_type == PieceType::King
+            && (from.x - to.x).abs() == 2;
+        let castling_side = if is_castling {
+            Some(to.x > from.x)  // true = kingside, false = queenside
+        } else {
+            None
+        };
 
         // Check if this is a pawn move (which resets the position history)
         let is_pawn_move = moving_piece.piece_type == PieceType::Pawn;
@@ -222,42 +324,67 @@ impl GameState {
                 Color::Black => self.captured_by_black.push(captured.clone()),
             }
         }
-        
+
         // Try to make the move
         if let Err(e) = self.board.move_piece(from, to) {
             return Err(e);
         }
-        
+
         // Get the piece type after the move (in case of promotion)
         let moved_piece = self.board.get_piece(to).unwrap().clone();
-        
+
+        // Detect promotion
+        let promotion = if moving_piece.piece_type == PieceType::Pawn
+            && moved_piece.piece_type != PieceType::Pawn
+        {
+            Some(moved_piece.piece_type)
+        } else {
+            None
+        };
+
         // Update piece tracking
         self.update_piece_tracking(from, to, &moved_piece);
-        
+
         // Toggle active color
         self.active_color = !self.active_color;
-        
+
         // Reset position history on capture or pawn move (50-move rule)
         if is_reset_move {
             self.position_history.clear();
         }
-        
+
         // Record the position after the move
         self.record_position();
-        
+
         // Update the game state
         self.update_state();
-        
+
         // If the move leaves the king in check, it's illegal
         if self.board.is_in_check(!self.active_color) {
             // Revert the move
             self.board = original_state;
             self.active_color = !self.active_color; // Toggle back
-            
+
             // Rebuild the pieces map since we reverted the board
             self.init_current_pieces();
+            // Remove any move we might have added
+            self.move_history.truncate(original_move_history_len);
             return Err("Move would leave king in check".to_string());
         }
+
+        // Record the move in history (after confirming it's legal)
+        let move_record = MoveRecord {
+            piece: moving_piece.piece_type,
+            color: moving_piece.color,
+            from,
+            to,
+            captured: captured_piece.map(|p| p.piece_type),
+            is_check: self.check,
+            is_checkmate: self.checkmate,
+            is_castling: castling_side,
+            promotion,
+        };
+        self.move_history.push(move_record);
 
         Ok(())
     }

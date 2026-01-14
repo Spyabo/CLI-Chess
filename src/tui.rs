@@ -17,7 +17,7 @@ use ratatui::{
 use crate::{
     board::{GameState, Position, Move},
     pieces::Color as PieceColor,
-    pixel_art::{calculate_board_layout, calculate_material, centered_rect, CapturedPiecesBar, GameOverModal, PixelArtBoard, PieceSprites},
+    pixel_art::{calculate_board_layout, calculate_material, centered_rect, CapturedPiecesBar, GameOverModal, MoveHistoryPanel, PixelArtBoard, PieceSprites},
 };
 
 type TuiResult<T> = Result<T, anyhow::Error>;
@@ -32,6 +32,8 @@ pub struct Tui {
     should_quit: bool,
     sprites: PieceSprites,
     capture_animation: Option<(Position, Instant)>,  // Position and start time of capture flash
+    show_history_panel: bool,    // Toggle with 'H'
+    use_unicode_notation: bool,  // Toggle with 'N'
 }
 
 impl Tui {
@@ -49,6 +51,8 @@ impl Tui {
             should_quit: false,
             sprites: PieceSprites::default(),
             capture_animation: None,
+            show_history_panel: true,   // Show by default
+            use_unicode_notation: false, // Use letters by default
         })
     }
 
@@ -101,12 +105,17 @@ impl Tui {
         let status_text = self.get_status_text(game_state);
         let sprites = &self.sprites;
         let capture_animation = self.capture_animation;
+        let show_history = self.show_history_panel;
+        let use_unicode = self.use_unicode_notation;
 
         // Get captured pieces for the capture bars
         let captured_by_white = game_state.captured_by_white.clone();
         let captured_by_black = game_state.captured_by_black.clone();
+        let move_history = game_state.move_history.clone();
 
         self.terminal.draw(|f| {
+            // Main vertical layout (always uses full screen width - no horizontal split)
+            // This keeps the board position stable for mouse calculations
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(1)
@@ -124,11 +133,11 @@ impl Tui {
             let board_area_height = chunks[2].height.saturating_sub(2) as usize;
             let layout = calculate_board_layout(board_area_width, board_area_height);
 
-            // Create title with fullscreen hint if needed
+            // Create title with hints
             let title_text = if !layout.use_sprites && !layout.too_small {
-                "CLI Chess (Q to quit, R to reset) | Fullscreen for better graphics"
+                "CLI Chess (Q quit, R reset, H history, N notation) | Fullscreen recommended"
             } else {
-                "CLI Chess (Q to quit, R to reset)"
+                "CLI Chess (Q quit, R reset, H history, N notation)"
             };
 
             let title = Paragraph::new(title_text)
@@ -168,12 +177,42 @@ impl Tui {
                 .style(Style::default())
                 .alignment(ratatui::layout::Alignment::Left);
 
-            // Render all widgets
+            // Render main content widgets
             f.render_widget(title, chunks[0]);
             f.render_widget(black_captures_bar, chunks[1]);
             f.render_widget(board, chunks[2]);
             f.render_widget(white_captures_bar, chunks[3]);
             f.render_widget(status_bar, chunks[4]);
+
+            // Render move history panel to the right of the board (within the board area)
+            if show_history {
+                // Calculate actual board dimensions (not the chunk, but the rendered board)
+                let board_pixel_width = (layout.square_width * 8) as u16;
+                let board_pixel_height = (layout.square_height * 8) as u16;
+                let board_area = chunks[2];
+
+                // Board is centered horizontally, but starts at y + 1 (matching board_widget.rs)
+                let board_x_start = board_area.x + 2 + ((board_area.width.saturating_sub(4)).saturating_sub(board_pixel_width)) / 2;
+                let board_x_end = board_x_start + board_pixel_width;
+                let board_y_start = board_area.y + 1;  // Matches board_widget.rs line 460
+
+                // History panel: positioned right after the board, SAME HEIGHT as actual board
+                let panel_width = 20u16;
+                let panel_x = board_x_end + 1;  // 1 char gap from board
+
+                // Only render if there's room
+                if panel_x + panel_width <= board_area.x + board_area.width {
+                    let history_area = ratatui::layout::Rect {
+                        x: panel_x,
+                        y: board_y_start,
+                        width: panel_width.min(board_area.x + board_area.width - panel_x),
+                        height: board_pixel_height,  // Match actual board height
+                    };
+
+                    let history_panel = MoveHistoryPanel::new(&move_history, use_unicode);
+                    f.render_widget(history_panel, history_area);
+                }
+            }
 
             // Render game-over modal if applicable
             if game_state.checkmate || game_state.stalemate {
@@ -249,6 +288,20 @@ impl Tui {
             }
             KeyCode::Char('r') => {
                 self.reset_game(game_state);
+            }
+            KeyCode::Char('h') => {
+                self.show_history_panel = !self.show_history_panel;
+                self.set_status(format!(
+                    "Move history {}",
+                    if self.show_history_panel { "shown" } else { "hidden" }
+                ));
+            }
+            KeyCode::Char('n') => {
+                self.use_unicode_notation = !self.use_unicode_notation;
+                self.set_status(format!(
+                    "Notation: {}",
+                    if self.use_unicode_notation { "Unicode pieces" } else { "Letters" }
+                ));
             }
             KeyCode::Up => self.move_cursor(0, 1),
             KeyCode::Down => self.move_cursor(0, -1),
@@ -352,14 +405,15 @@ impl Tui {
         let term_size = self.terminal.size().ok()?;
 
         // Calculate the board area (matching the draw layout)
-        // Layout: margin(1), title(2), board(85%), status(2)
+        // Layout: margin(1), title(2), captures_bar(1), board(flexible), captures_bar(1), status(2)
         let margin = 1u16;
         let title_height = 2u16;
+        let captures_bar_height = 1u16; // Black's captures bar above the board
         let status_height = 2u16;
 
         // Calculate board area dimensions
         let total_height = term_size.height.saturating_sub(margin * 2);
-        let board_area_height = (total_height.saturating_sub(title_height + status_height) * 85) / 100;
+        let board_area_height = total_height.saturating_sub(title_height + captures_bar_height * 2 + status_height);
         let board_area_width = term_size.width.saturating_sub(margin * 2);
 
         // Calculate available space (matching board_widget.rs)
@@ -379,7 +433,8 @@ impl Tui {
         // Calculate board position (centred horizontally)
         let board_pixel_width = (square_width * 8) as u16;
         let board_x_offset = margin + 2 + ((available_width as u16).saturating_sub(board_pixel_width)) / 2;
-        let board_y_offset = margin + title_height + 1;
+        // Y offset: margin + title + captures_bar + board internal offset (1)
+        let board_y_offset = margin + title_height + captures_bar_height + 1;
 
         // Check if click is within board bounds
         if mouse.column < board_x_offset || mouse.row < board_y_offset {

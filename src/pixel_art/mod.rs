@@ -2,11 +2,13 @@ mod board_widget;
 mod captured_bar;
 mod colours;
 mod game_over_modal;
+mod move_history;
 mod sprites;
 
 pub use board_widget::{calculate_board_layout, PixelArtBoard};
 pub use captured_bar::{calculate_material, CapturedPiecesBar};
 pub use game_over_modal::{centered_rect, GameOverModal};
+pub use move_history::MoveHistoryPanel;
 pub use sprites::PieceSprites;
 
 use ratatui::style::Color;
