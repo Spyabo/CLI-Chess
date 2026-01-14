@@ -1,6 +1,7 @@
 use crate::board::{Board, Position};
 use crate::pieces::{Color, PieceType};
 
+#[allow(dead_code)]
 pub fn get_valid_moves(board: &Board, from: Position) -> std::collections::HashSet<Position> {
     let mut moves = std::collections::HashSet::new();
     

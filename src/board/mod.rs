@@ -29,8 +29,6 @@ pub struct GameState {
     pub check: bool,
     pub checkmate: bool,
     pub stalemate: bool,
-    pub selected_square: Option<Position>,
-    pub valid_moves: HashSet<Position>,
     pub position_history: HashMap<String, u8>,
     pub current_pieces: HashMap<Color, HashSet<(PieceType, Position)>>,
     pub captured_by_white: Vec<Piece>,  // Black pieces captured by white
@@ -48,8 +46,6 @@ impl Default for GameState {
             check: false,
             checkmate: false,
             stalemate: false,
-            selected_square: None,
-            valid_moves: HashSet::new(),
             position_history: HashMap::new(),
             current_pieces: HashMap::new(),
             captured_by_white: Vec::new(),
@@ -71,8 +67,6 @@ impl GameState {
         let mut game_state = Self {
             board,
             active_color: Color::White,
-            selected_square: None,
-            valid_moves: HashSet::new(),
             check: false,
             checkmate: false,
             stalemate: false,
@@ -100,8 +94,6 @@ impl GameState {
         let mut game_state = Self {
             board,
             active_color,
-            selected_square: None,
-            valid_moves: HashSet::new(),
             check: false,
             checkmate: false,
             stalemate: false,
@@ -123,24 +115,7 @@ impl GameState {
     fn update_state(&mut self) {
         // Update check status
         self.check = self.board.is_in_check(self.active_color);
-        
-        // Update valid moves for selected piece using the moves module
-        if let Some(pos) = self.selected_square {
-            use crate::moves::get_valid_moves;
-            self.valid_moves = get_valid_moves(&self.board, pos);
-            
-            // Filter out moves that would put the king in check
-            let current_moves = self.valid_moves.clone();
-            self.valid_moves = current_moves.into_iter()
-                .filter(|&to| {
-                    let mut board_clone = self.board.clone();
-                    board_clone.move_piece(pos, to).is_ok()
-                })
-                .collect();
-        } else {
-            self.valid_moves.clear();
-        }
-        
+
         // Check for checkmate/stalemate/threefold repetition
         if !self.has_any_legal_moves() {
             if self.board.is_in_check(self.active_color) {
@@ -283,11 +258,7 @@ impl GameState {
             self.init_current_pieces();
             return Err("Move would leave king in check".to_string());
         }
-        
-        // Clear the selected square and valid moves
-        self.selected_square = None;
-        self.valid_moves.clear();
-        
+
         Ok(())
     }
     

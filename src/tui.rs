@@ -2,7 +2,7 @@ use anyhow::{Result, Context};
 use std::time::Instant;
 
 use crossterm::{
-    event::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind},
+    event::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode},
 };
@@ -24,7 +24,6 @@ type TuiResult<T> = Result<T, anyhow::Error>;
 
 pub struct Tui {
     terminal: Terminal<CrosstermBackend<std::io::Stderr>>,
-    mouse_enabled: bool,
     status_message: String,
     status_timer: Option<Instant>,
     cursor_position: Position,
@@ -42,7 +41,6 @@ impl Tui {
         
         Ok(Self {
             terminal,
-            mouse_enabled: false,
             status_message: String::new(),
             status_timer: None,
             cursor_position: Position::new(0, 0).expect("Invalid initial cursor position"),
@@ -67,7 +65,7 @@ impl Tui {
     
     fn setup(&mut self) -> TuiResult<()> {
         enable_raw_mode().context("Failed to enable raw mode")?;
-        execute!(std::io::stderr(), EnterAlternateScreen)
+        execute!(std::io::stderr(), EnterAlternateScreen, EnableMouseCapture)
             .context("Failed to enter alternate screen")?;
         self.terminal.clear().context("Failed to clear terminal")?;
         Ok(())
@@ -75,7 +73,7 @@ impl Tui {
     
     pub fn cleanup(&mut self) -> TuiResult<()> {
         disable_raw_mode()?;
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(self.terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
         self.terminal.show_cursor().context("Failed to show cursor")?;
         Ok(())
     }
@@ -128,9 +126,9 @@ impl Tui {
 
             // Create title with fullscreen hint if needed
             let title_text = if !layout.use_sprites && !layout.too_small {
-                "CLI Chess (Q to quit, R to reset, M for mouse) | Fullscreen for better graphics"
+                "CLI Chess (Q to quit, R to reset) | Fullscreen for better graphics"
             } else {
-                "CLI Chess (Q to quit, R to reset, M to toggle mouse)"
+                "CLI Chess (Q to quit, R to reset)"
             };
 
             let title = Paragraph::new(title_text)
@@ -252,9 +250,6 @@ impl Tui {
             KeyCode::Char('r') => {
                 self.reset_game(game_state);
             }
-            KeyCode::Char('m') => {
-                self.toggle_mouse();
-            }
             KeyCode::Up => self.move_cursor(0, 1),
             KeyCode::Down => self.move_cursor(0, -1),
             KeyCode::Left => self.move_cursor(-1, 0),
@@ -279,14 +274,6 @@ impl Tui {
         self.possible_moves.clear();
         self.capture_animation = None;
         self.set_status("Game reset".to_string());
-    }
-
-    fn toggle_mouse(&mut self) {
-        self.mouse_enabled = !self.mouse_enabled;
-        self.set_status(format!(
-            "Mouse {}", 
-            if self.mouse_enabled { "enabled" } else { "disabled" }
-        ));
     }
 
     fn move_cursor(&mut self, dx: i8, dy: i8) {
@@ -345,7 +332,7 @@ impl Tui {
     }
 
     fn handle_mouse_event(&mut self, mouse: MouseEvent, game_state: &mut GameState) -> TuiResult<()> {
-        if game_state.checkmate || game_state.stalemate || !self.mouse_enabled {
+        if game_state.checkmate || game_state.stalemate {
             return Ok(());
         }
 
@@ -414,8 +401,14 @@ impl Tui {
     }
 
     fn handle_square_click(&mut self, pos: Position, game_state: &mut GameState) -> TuiResult<()> {
-        if let Some(selected_pos) = game_state.selected_square {
-            if game_state.valid_moves.contains(&pos) {
+        // Update cursor to clicked position for keyboard/mouse sync
+        self.cursor_position = pos;
+
+        if let Some(selected_pos) = self.selected_piece {
+            // Check if clicked position is a valid move destination
+            let is_valid_move = self.possible_moves.iter().any(|m| m.to == pos);
+
+            if is_valid_move {
                 // Check if this is a capture before making the move
                 let is_capture = game_state.board.get_piece(pos).is_some();
                 // Also check for en passant capture
@@ -430,57 +423,42 @@ impl Tui {
                     if is_capture || is_en_passant {
                         self.capture_animation = Some((pos, Instant::now()));
                     }
+                    self.deselect_piece();
                 }
             } else {
-                self.try_select_new_piece(pos, game_state);
+                // Try to select a different piece
+                self.try_select_piece_at_position(pos, game_state);
             }
         } else {
-            self.try_select_piece(pos, game_state);
+            self.try_select_piece_at_position(pos, game_state);
         }
         Ok(())
     }
 
-    fn try_select_new_piece(&mut self, pos: Position, game_state: &mut GameState) {
+    fn try_select_piece_at_position(&mut self, pos: Position, game_state: &GameState) {
         if let Some(piece) = game_state.board.get_piece(pos) {
             if piece.color == game_state.active_color {
-                game_state.selected_square = Some(pos);
-                game_state.valid_moves = game_state.board.get_legal_moves(pos);
-                
-                if game_state.valid_moves.is_empty() {
-                    self.set_status("No legal moves for selected piece".to_string());
-                    game_state.selected_square = None;
-                }
-            }
-        } else {
-            game_state.selected_square = None;
-            game_state.valid_moves.clear();
-        }
-    }
-
-    fn try_select_piece(&mut self, pos: Position, game_state: &mut GameState) {
-        if let Some(piece) = game_state.board.get_piece(pos) {
-            if piece.color == game_state.active_color {
-                use crate::moves::get_valid_moves;
-                
-                game_state.selected_square = Some(pos);
-                game_state.valid_moves = get_valid_moves(&game_state.board, pos);
-                
-                // Filter out moves that would put the king in check
-                let current_moves = game_state.valid_moves.clone();
-                game_state.valid_moves = current_moves.into_iter()
-                    .filter(|&to| {
-                        let mut board_clone = game_state.board.clone();
-                        board_clone.move_piece(pos, to).is_ok()
+                self.selected_piece = Some(pos);
+                self.possible_moves = game_state.board.get_legal_moves(pos)
+                    .into_iter()
+                    .map(|to| Move {
+                        from: pos,
+                        to,
+                        promotion: None,
                     })
                     .collect();
-                
-                if game_state.valid_moves.is_empty() {
+
+                if self.possible_moves.is_empty() {
                     self.set_status("No legal moves for selected piece".to_string());
-                    game_state.selected_square = None;
+                    self.selected_piece = None;
+                } else {
+                    self.set_status(format!("Selected {} at {}", piece, pos));
                 }
             } else {
                 self.set_status("It's not your turn to move that piece".to_string());
             }
+        } else {
+            self.deselect_piece();
         }
     }
         
