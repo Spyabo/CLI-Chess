@@ -208,7 +208,7 @@ impl<'a> PixelArtBoard<'a> {
         }
 
         // Render piece if present
-        if let Some(piece) = self.game_state.board.get_piece(pos) {
+        let has_piece = if let Some(piece) = self.game_state.board.get_piece(pos) {
             if piece.piece_type != PieceType::Empty {
                 let sprite = self.get_sprite(piece.piece_type);
                 self.render_sprite_clipped(
@@ -222,6 +222,85 @@ impl<'a> PixelArtBoard<'a> {
                     square_height,
                     clip_area,
                 );
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // Check if this is a legal move destination
+        let is_legal_move = self.possible_moves.iter().any(|m| m.to == pos);
+
+        // Render corner markers for empty legal move squares
+        if !has_piece && is_legal_move {
+            let marker_color = Color::Rgb(60, 60, 60); // Dark gray corners
+            let tr_x = x_offset + square_width as u16 - 1;
+            let bl_y = y_offset + square_height as u16 - 1;
+            // Top-left
+            if x_offset < clip_area.right() && y_offset < clip_area.bottom() {
+                buf.get_mut(x_offset, y_offset)
+                    .set_char('┌')
+                    .set_fg(marker_color)
+                    .set_bg(bg_colour);
+            }
+            // Top-right
+            if tr_x < clip_area.right() && y_offset < clip_area.bottom() {
+                buf.get_mut(tr_x, y_offset)
+                    .set_char('┐')
+                    .set_fg(marker_color)
+                    .set_bg(bg_colour);
+            }
+            // Bottom-left
+            if x_offset < clip_area.right() && bl_y < clip_area.bottom() {
+                buf.get_mut(x_offset, bl_y)
+                    .set_char('└')
+                    .set_fg(marker_color)
+                    .set_bg(bg_colour);
+            }
+            // Bottom-right
+            if tr_x < clip_area.right() && bl_y < clip_area.bottom() {
+                buf.get_mut(tr_x, bl_y)
+                    .set_char('┘')
+                    .set_fg(marker_color)
+                    .set_bg(bg_colour);
+            }
+        }
+
+        // Render border for capturable enemy pieces
+        if has_piece && is_legal_move {
+            let border_color = Color::Rgb(200, 60, 60); // Red border for captures
+            // Draw corner markers to indicate capture
+            // Top-left
+            if x_offset < clip_area.right() && y_offset < clip_area.bottom() {
+                buf.get_mut(x_offset, y_offset)
+                    .set_char('▛')
+                    .set_fg(border_color)
+                    .set_bg(bg_colour);
+            }
+            // Top-right
+            let tr_x = x_offset + square_width as u16 - 1;
+            if tr_x < clip_area.right() && y_offset < clip_area.bottom() {
+                buf.get_mut(tr_x, y_offset)
+                    .set_char('▜')
+                    .set_fg(border_color)
+                    .set_bg(bg_colour);
+            }
+            // Bottom-left
+            let bl_y = y_offset + square_height as u16 - 1;
+            if x_offset < clip_area.right() && bl_y < clip_area.bottom() {
+                buf.get_mut(x_offset, bl_y)
+                    .set_char('▙')
+                    .set_fg(border_color)
+                    .set_bg(bg_colour);
+            }
+            // Bottom-right
+            if tr_x < clip_area.right() && bl_y < clip_area.bottom() {
+                buf.get_mut(tr_x, bl_y)
+                    .set_char('▟')
+                    .set_fg(border_color)
+                    .set_bg(bg_colour);
             }
         }
     }
