@@ -471,4 +471,66 @@ mod tests {
 
         fs::remove_file(path).ok();
     }
+
+    #[test]
+    fn test_save_overwrite_deletes_old_file() {
+        // Simulate the save-overwrite behavior:
+        // 1. Save a game to a file
+        // 2. Delete old file and save to new file with different names
+        // 3. Verify old file is gone, new file exists with correct names
+
+        let mut game_state = GameState::new();
+        // Play a move
+        game_state.make_move(
+            Position::from_notation("e2").unwrap(),
+            Position::from_notation("e4").unwrap(),
+            None,
+        ).unwrap();
+
+        // Initial save with original names
+        let old_path = "/tmp/test_overwrite_Alice-Bob-old.pgn";
+        export_pgn(&game_state, old_path, "Alice", "Bob").unwrap();
+        assert!(std::path::Path::new(old_path).exists(), "Old file should exist after initial save");
+
+        // Verify old file has correct player names
+        let old_content = fs::read_to_string(old_path).unwrap();
+        assert!(old_content.contains("[White \"Alice\"]"));
+        assert!(old_content.contains("[Black \"Bob\"]"));
+
+        // Play another move
+        game_state.make_move(
+            Position::from_notation("e7").unwrap(),
+            Position::from_notation("e5").unwrap(),
+            None,
+        ).unwrap();
+
+        // Simulate overwrite: delete old file, save to new file with different names
+        fs::remove_file(old_path).unwrap();
+        let new_path = "/tmp/test_overwrite_Charlie-Dave-new.pgn";
+        export_pgn(&game_state, new_path, "Charlie", "Dave").unwrap();
+
+        // Verify old file is deleted
+        assert!(!std::path::Path::new(old_path).exists(), "Old file should be deleted");
+
+        // Verify new file exists with updated names and moves
+        assert!(std::path::Path::new(new_path).exists(), "New file should exist");
+        let new_content = fs::read_to_string(new_path).unwrap();
+        assert!(new_content.contains("[White \"Charlie\"]"));
+        assert!(new_content.contains("[Black \"Dave\"]"));
+        assert!(new_content.contains("1. e4 e5"));
+
+        // Cleanup
+        fs::remove_file(new_path).ok();
+    }
+
+    #[test]
+    fn test_generate_save_filename_changes_with_names() {
+        // Verify that different player names generate different filenames
+        let filename1 = generate_save_filename("Alice", "Bob");
+        let filename2 = generate_save_filename("Charlie", "Dave");
+
+        assert!(filename1.contains("Alice-Bob"), "Filename should contain player names");
+        assert!(filename2.contains("Charlie-Dave"), "Filename should contain player names");
+        assert_ne!(filename1, filename2, "Different names should produce different filenames");
+    }
 }

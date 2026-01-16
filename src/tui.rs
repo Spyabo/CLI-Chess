@@ -59,6 +59,8 @@ pub struct Tui {
     // Player names (from save or load)
     white_player: String,
     black_player: String,
+    // Loaded filename for overwriting on save
+    loaded_filename: Option<String>,
 }
 
 impl Tui {
@@ -90,6 +92,7 @@ impl Tui {
             save_modal: None,
             white_player: "White".to_string(),
             black_player: "Black".to_string(),
+            loaded_filename: None,
         })
     }
 
@@ -356,8 +359,8 @@ impl Tui {
                 }
             }
 
-            // Render game-over modal if applicable
-            if game_state.checkmate || game_state.stalemate {
+            // Render game-over modal if applicable (but not when viewing history)
+            if (game_state.checkmate || game_state.stalemate) && !history_focused {
                 let modal = if game_state.checkmate {
                     // The winner is the opposite of active_color (who is in checkmate)
                     let winner = match game_state.active_color {
@@ -514,12 +517,19 @@ impl Tui {
                 KeyCode::Enter => {
                     let white_name = modal.white_name().to_string();
                     let black_name = modal.black_name().to_string();
+                    // Delete old file if we loaded one (overwrite behavior)
+                    if let Some(ref old_filename) = self.loaded_filename {
+                        let _ = std::fs::remove_file(old_filename);
+                    }
+                    // Always generate new filename with current names and timestamp
                     let filename = pgn::generate_save_filename(&white_name, &black_name);
                     match pgn::export_pgn(game_state, &filename, &white_name, &black_name) {
                         Ok(()) => {
                             // Store player names for display
                             self.white_player = white_name;
                             self.black_player = black_name;
+                            // Track the new file for future saves
+                            self.loaded_filename = Some(filename.clone());
                             self.set_status(format!("Game saved to {}", filename));
                         }
                         Err(e) => self.set_status(format!("Save failed: {}", e)),
@@ -555,9 +565,17 @@ impl Tui {
                                     self.white_player = white;
                                     self.black_player = black;
                                 }
+                                // Store filename for overwriting on save
+                                self.loaded_filename = Some(filename.clone());
                                 self.deselect_piece();
-                                self.exit_history_focus();
-                                self.set_status(format!("Loaded {}", filename));
+                                // Auto-show history for finished games
+                                if game_state.checkmate || game_state.stalemate {
+                                    self.enter_history_focus(game_state);
+                                    self.set_status(format!("Loaded {} - Game finished, viewing history", filename));
+                                } else {
+                                    self.exit_history_focus();
+                                    self.set_status(format!("Loaded {}", filename));
+                                }
                             }
                             Err(e) => {
                                 self.set_status(format!("Load failed: {}", e));
@@ -742,9 +760,10 @@ impl Tui {
         // Reset promotion state
         self.pending_promotion = None;
         self.promotion_selection = 0;
-        // Reset player names
+        // Reset player names and loaded filename
         self.white_player = "White".to_string();
         self.black_player = "Black".to_string();
+        self.loaded_filename = None;
         self.set_status("Game reset".to_string());
     }
 
