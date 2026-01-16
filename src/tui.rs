@@ -675,8 +675,13 @@ impl Tui {
                 ));
             }
             KeyCode::Char('s') => {
-                // Open save game modal
-                self.save_modal = Some(SaveGameModal::new());
+                // Open save game modal - pre-fill names if custom names were set (from load or previous save)
+                let modal = if self.white_player == "White" && self.black_player == "Black" {
+                    SaveGameModal::new()
+                } else {
+                    SaveGameModal::new_with_names(&self.white_player, &self.black_player)
+                };
+                self.save_modal = Some(modal);
             }
             KeyCode::Char('l') => {
                 // Open load game modal

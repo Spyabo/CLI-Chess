@@ -23,6 +23,7 @@ pub struct SaveGameModal {
 }
 
 impl SaveGameModal {
+    /// Create a save modal with default placeholder names
     pub fn new() -> Self {
         Self {
             white_name: "P1".to_string(),
@@ -30,6 +31,17 @@ impl SaveGameModal {
             active_field: SaveModalField::White,
             white_is_default: true,
             black_is_default: true,
+        }
+    }
+
+    /// Create a save modal with player names pre-filled (e.g., from a loaded game)
+    pub fn new_with_names(white: &str, black: &str) -> Self {
+        Self {
+            white_name: white.to_string(),
+            black_name: black.to_string(),
+            active_field: SaveModalField::White,
+            white_is_default: false,
+            black_is_default: false,
         }
     }
 
