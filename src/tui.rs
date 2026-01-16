@@ -311,9 +311,15 @@ impl Tui {
 
             // Render main content widgets
             f.render_widget(title, chunks[0]);
-            f.render_widget(black_captures_bar, chunks[1]);
+            // Swap capture bars when board is flipped so bottom player's captures stay at bottom
+            if effective_flip {
+                f.render_widget(white_captures_bar, chunks[1]);
+                f.render_widget(black_captures_bar, chunks[3]);
+            } else {
+                f.render_widget(black_captures_bar, chunks[1]);
+                f.render_widget(white_captures_bar, chunks[3]);
+            }
             f.render_widget(board, chunks[2]);
-            f.render_widget(white_captures_bar, chunks[3]);
             f.render_widget(status_bar, chunks[4]);
 
             // Render move history panel to the right of the board (within the board area)
